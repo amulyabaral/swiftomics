@@ -1,0 +1,2748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swiftomics - Run bioinformatics tools locally in your browser</title>
+    <link rel="icon" type="image/png" href="logo_dark.png">
+    <!-- fastp.js is now loaded in the Web Worker -->
+    <script src="jszip.min.js"></script>
+    <script src="pako.min.js"></script>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { 
+        font-family: monospace; 
+        line-height: 1.5;
+        height: 100vh;
+        background: #fafafa;
+        color: #18181b;
+        -webkit-font-smoothing: antialiased;
+        margin: 0;
+        overflow: hidden;
+      }
+      button, input { font: inherit; }
+      button { cursor: pointer; }
+      
+      :root {
+        --brand: #ff6600;
+        --bg: #fafafa;
+        --card: #fff;
+        --border: #e4e4e7;
+        --text: #18181b;
+        --text-light: #71717a;
+        --text-lighter: #a1a1aa;
+        --sidebar-width: 18rem;
+        --sidebar-width-expanded: 45rem;
+        --footer-height: 3.25rem; /* space reserved for fixed footer */
+      }
+      
+      .hidden { display: none; }
+      .flex { display: flex; }
+      .flex-1 { flex: 1; }
+      .items-center { align-items: center; }
+      .justify-between { justify-content: space-between; }
+      .gap-2 { gap: 0.5rem; }
+      .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      svg { flex-shrink: 0; }
+      
+      a { color: var(--text-light); text-decoration: none; transition: color .15s; }
+      a:hover { color: var(--brand); }
+      
+      .app-layout {
+        display: grid;
+        grid-template-columns: var(--sidebar-width) 1fr;
+        /* reserve footer space so the app content + footer exactly fit 100vh */
+        height: calc(100vh - var(--footer-height));
+        gap: 0;
+      }
+
+      .tools-pane {
+        background: var(--card);
+        border-right: 1px solid var(--border);
+        padding: 0;
+        height: 100vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .tools-header {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      
+      .tools-content {
+        padding: 0.75rem;
+                /* ensure tools content doesn't get hidden behind the fixed footer */
+                padding-bottom: var(--footer-height);
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      /* Drag and Drop Styles */
+      .tool-card {
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .tool-card[draggable="true"] {
+        cursor: grab;
+      }
+
+      .tool-card[draggable="true"]:active {
+        cursor: grabbing;
+      }
+
+      .tool-card.dragging {
+        opacity: 0.5;
+        transform: rotate(3deg);
+      }
+
+      .file-table tbody tr[data-file-index].drag-over {
+        background: #fef3c7 !important;
+        border-left: 4px solid var(--brand);
+      }
+
+      body.dragging-tool {
+        cursor: grabbing !important;
+      }
+
+      body.dragging-tool * {
+        cursor: grabbing !important;
+      }
+
+      body.dragging-tool .file-table tbody tr[data-file-index] {
+        cursor: copy !important;
+      }
+
+      .status-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 0.25rem;
+      }
+
+      .status-idle { background: #d1d5db; }
+      .status-queued { background: #f59e0b; animation: pulse 1.5s infinite; }
+      .status-running { background: #3b82f6; animation: pulse 1s infinite; }
+      .status-success { background: #10b981; }
+      .status-error { background: #ef4444; }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .results-row {
+        display: none;
+      }
+
+      .results-row.visible {
+        display: table-row;
+      }
+      
+      .main-content {
+                padding: 0.5rem;
+                overflow-y: auto;
+                /* keep content above the fixed footer so drop areas aren't overlapped */
+                padding-bottom: calc(var(--footer-height) + 0.75rem);
+      }
+      
+      h1 { font-size: 2rem; font-weight: 700; margin-bottom: 1rem; letter-spacing: -0.025em; }
+      
+      .badge { 
+        display: inline-flex; 
+        align-items: center;
+        background: #ffedd5; 
+        color: var(--brand); 
+        padding: 0.25rem 0.75rem; 
+        border-radius: 9999px; 
+        font-size: 0.875rem; 
+        font-weight: 500;
+        margin-bottom: 1rem;
+      }
+      
+      .card { 
+        background: var(--card); 
+        border: 1px solid var(--border); 
+        border-radius: 0.75rem; 
+        padding: 2rem; 
+        box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+        text-align: left;
+      }
+      
+      .section {
+        padding: 0.75rem 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+
+            /* files section should be flex when visible; keep hidden via the .hidden class which sets display:none */
+            #files-section {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+            }
+      
+      .section-title {
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      
+      #upload-area { 
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 1rem;
+        border: 2px dashed var(--border); 
+        border-radius: 0.5rem; 
+        background: var(--bg);
+        cursor: pointer;
+        transition: all .2s;
+                /* reduce min height so it doesn't push content under the footer */
+                min-height: 8rem;
+            }
+      #upload-area:hover { border-color: var(--brand); background: #fffaf0; }
+      #upload-area.disabled { cursor: not-allowed; opacity: 0.5; }
+      
+      .file-list-wrapper {
+                /* allow the file list to grow and scroll within its container (container will be flex:1) */
+                max-height: none;
+                overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+      }
+
+      .file-list-wrapper::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .file-list-wrapper::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .file-list-wrapper::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      .file-list-wrapper::-webkit-scrollbar-thumb:hover {
+        background: var(--text-light);
+      }
+      
+      .file-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.75rem;
+      }
+      .file-table thead {
+        position: sticky;
+        top: 0;
+        background: transparent;
+        z-index: 10;
+      }
+      .file-table th {
+        text-align: left;
+        padding: 0.5rem 0.25rem;
+        border-bottom: 2px solid var(--border);
+        border-right: 1px solid var(--border);
+        font-weight: 700;
+        color: #000;
+        font-size: 0.875rem;
+        background: transparent;
+      }
+      .file-table th:last-child {
+        border-right: none;
+      }
+      .file-table td {
+        padding: 0.5rem 0.25rem;
+        border-top: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+      }
+      .file-table td:last-child {
+        border-right: none;
+      }
+      .file-table tbody tr[data-file-index] {
+        height: 2.5rem;
+      }
+      .file-table tbody tr[data-file-index]:first-child td {
+        border-top: none;
+      }
+      .file-table tbody tr:hover { background: var(--bg); }
+      .file-table tbody tr.selected { background: #fff7ed; }
+      .file-table input[type="text"] {
+        width: 100%;
+        padding: 0.125rem 0.25rem;
+        border: 1px solid var(--border);
+        border-radius: 0.25rem;
+        background: var(--card);
+        font-size: 0.75rem;
+      }
+      .file-table input[type="text"]:focus {
+        outline: none;
+        border-color: var(--brand);
+      }
+      
+      
+      .tool-card {
+        padding: 0.5rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 0.375rem;
+        background: var(--card);
+        font-size: 0.875rem;
+        transition: all .2s;
+        margin-bottom: 0.5rem;
+        width: 100%;
+        text-align: left;
+        min-height: 2.5rem;
+        display: flex;
+        align-items: center;
+      }
+      .tool-card:hover:not(:disabled) { 
+        border-color: var(--brand); 
+        background: #fffaf0;
+        transform: translateX(2px);
+      }
+      .tool-card:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .tool-card.active {
+        border-color: var(--brand);
+        background: #fffaf0;
+      }
+
+      .tool-options {
+        display: none;
+        padding: 0.75rem;
+        background: #fafafa;
+        border-top: 1px solid var(--border);
+        margin-top: 0.5rem;
+        border-radius: 0.375rem;
+        font-size: 0.75rem;
+      }
+
+      .tool-options.expanded {
+        display: block;
+      }
+
+      .option-group {
+        margin-bottom: 0.75rem;
+      }
+
+      .option-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .option-label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+        color: var(--text);
+      }
+
+      .option-input {
+        width: 100%;
+        padding: 0.375rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        background: white;
+      }
+
+      .option-input:focus {
+        outline: none;
+        border-color: var(--brand);
+      }
+
+      .option-checkbox {
+        margin-right: 0.375rem;
+      }
+
+      .options-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--border);
+      }
+
+      .btn-options {
+        flex: 1;
+        padding: 0.375rem 0.75rem;
+        font-size: 0.75rem;
+        border-radius: 0.25rem;
+        border: none;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+
+      .btn-save-options {
+        background: var(--brand);
+        color: white;
+      }
+
+      .btn-save-options:hover {
+        background: #ea580c;
+      }
+
+      .btn-reset-options {
+        background: var(--border);
+        color: var(--text);
+      }
+
+      .btn-reset-options:hover {
+        background: #d4d4d8;
+      }
+
+      .stat-card {
+        background: var(--bg);
+        padding: 0.75rem;
+        border-radius: 0.25rem;
+        margin-bottom: 0.5rem;
+      }
+      .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-light);
+        margin-bottom: 0.25rem;
+      }
+      .stat-value {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--brand);
+      }
+      
+      button { 
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        transition: all .2s;
+      }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      
+      .btn-primary { 
+        background: var(--brand); 
+        color: #fff; 
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      }
+      .btn-primary:hover:not(:disabled) { background: #ea580c; transform: scale(1.02); }
+      
+      .btn-secondary { background: var(--border); color: var(--text); }
+      .btn-secondary:hover { background: #d4d4d8; }
+      
+      .btn-small { 
+        padding: 0.25rem 0.5rem; 
+        font-size: 0.75rem; 
+        background: #27272a;
+        color: #fff;
+      }
+      .btn-small:hover { background: #3f3f46; }
+      
+      #terminal-container { margin-top: 1rem; }
+      #terminal-toggle { 
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem;
+        background: #27272a;
+        color: #e4e4e7;
+        border-radius: 0.5rem 0.5rem 0 0;
+      }
+      #terminal {
+        padding: 1rem;
+        background: #18181b;
+        color: #4ade80;
+        font-size: 0.75rem;
+        border-radius: 0 0 0.5rem 0.5rem;
+        height: 16rem;
+        overflow-y: auto;
+      }
+      #terminal::-webkit-scrollbar { width: 0.5em; }
+      #terminal::-webkit-scrollbar-track { background: #27272a; border-radius: 10px; }
+      #terminal::-webkit-scrollbar-thumb { background: #52525b; border-radius: 10px; }
+      
+      .progress-bar { 
+        width: 100%;
+        height: 0.625rem;
+        background: var(--border);
+        border-radius: 9999px;
+        overflow: hidden;
+        margin-top: 0.5rem;
+      }
+      .progress-fill { 
+        height: 100%;
+        background: var(--brand);
+        border-radius: 9999px;
+        transition: width .5s;
+      }
+      
+      .hero-text { display: inline-block; min-height: 1.2em; }
+      .typing-cursor { 
+        display: inline-block; 
+        width: 3px; 
+        height: 1em; 
+        background: var(--brand); 
+        margin-left: 2px; 
+        animation: blink 0.8s step-end infinite;
+        vertical-align: text-bottom;
+      }
+      @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .spin { animation: spin 1s linear infinite; }
+      
+      @media (min-width: 768px) {
+        h1 { font-size: 3rem; }
+      }
+
+      @media (max-width: 1024px) {
+        .app-layout {
+          grid-template-columns: 1fr;
+        }
+        .tools-pane {
+          position: static;
+          height: auto;
+          width: 100% !important;
+          border: none;
+          border-bottom: 1px solid var(--border);
+        }
+      }
+    </style>
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Left Pane: Tools and Pipelines -->
+        <aside class="tools-pane">
+            <div class="tools-header">
+                <a href="#" class="flex items-center gap-2" aria-label="Swiftomics home" style="text-decoration:none">
+                    <img src="logo_dark.png" alt="Swiftomics Logo" style="height:3rem">
+                    <span style="font-size:1.5rem;font-weight:700;color:#000">swiftomics</span>
+                </a>
+            </div>
+            <div class="tools-content">
+                <h3 style="font-size:0.75rem;font-weight:600;color:var(--text-light);margin-bottom:0.5rem;text-transform:uppercase;letter-spacing:0.05em">Tools and Pipelines</h3>
+                <p style="font-size:0.7rem;color:var(--text-light);margin-bottom:0.75rem;line-height:1.4">Click tool to configure, then drag onto files</p>
+
+                <div class="tool-wrapper" style="margin-bottom:0.75rem">
+                    <div id="fastp-tool" class="tool-card" data-tool="fastp" draggable="true">
+                        <span style="font-size:1.5rem;margin-right:0.5rem">🔬</span>
+                        <div style="flex:1">
+                            <div style="font-weight:600;font-size:0.875rem">fastp</div>
+                            <div style="font-size:0.7rem;color:var(--text-light)">Quality control & filtering</div>
+                        </div>
+                        <svg id="fastp-chevron" style="width:1rem;height:1rem;color:var(--text-light);transition:transform 0.2s" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                        </svg>
+                    </div>
+
+                    <div id="fastp-options" class="tool-options">
+                        <div class="option-group">
+                            <label class="option-label">Quality Threshold (Phred Score)</label>
+                            <input type="number" id="fastp-quality" class="option-input" value="15" min="0" max="40" placeholder="15">
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">Minimum Phred quality score (default: 15)</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">Length Threshold (bp)</label>
+                            <input type="number" id="fastp-length" class="option-input" value="15" min="0" placeholder="15">
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">Minimum read length after trimming (default: 15)</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="fastp-trim-front" class="option-checkbox" checked>
+                                Trim Front
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Trim N bases from front for read1</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="fastp-trim-tail" class="option-checkbox" checked>
+                                Trim Tail
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Trim N bases from tail for read1</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="fastp-dedup" class="option-checkbox">
+                                Enable Deduplication
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Remove duplicate reads</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="fastp-adapter-trim" class="option-checkbox" checked>
+                                Auto-detect Adapters
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Automatically detect and trim adapters</div>
+                        </div>
+
+                        <div class="options-actions">
+                            <button id="fastp-save-btn" class="btn-options btn-save-options">Save</button>
+                            <button id="fastp-reset-btn" class="btn-options btn-reset-options">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tool-wrapper" style="margin-bottom:0.75rem">
+                    <div id="bowtie2-tool" class="tool-card" data-tool="bowtie2" draggable="true">
+                        <span style="font-size:1.5rem;margin-right:0.5rem">🧬</span>
+                        <div style="flex:1">
+                            <div style="font-weight:600;font-size:0.875rem">bowtie2</div>
+                            <div style="font-size:0.7rem;color:var(--text-light)">Align reads to MEGARes database</div>
+                        </div>
+                        <svg id="bowtie2-chevron" style="width:1rem;height:1rem;color:var(--text-light);transition:transform 0.2s" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                        </svg>
+                    </div>
+
+                    <div id="bowtie2-options" class="tool-options">
+                        <div class="option-group">
+                            <label class="option-label">Alignment Mode</label>
+                            <select id="bowtie2-mode" class="option-input">
+                                <option value="--end-to-end">End-to-end (default)</option>
+                                <option value="--local">Local</option>
+                            </select>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">End-to-end: entire read must align; Local: substrings may align</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">Preset</label>
+                            <select id="bowtie2-preset" class="option-input">
+                                <option value="--very-fast">Very fast</option>
+                                <option value="--fast">Fast</option>
+                                <option value="--sensitive" selected>Sensitive (default)</option>
+                                <option value="--very-sensitive">Very sensitive</option>
+                            </select>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">Trade-off between speed and sensitivity</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="bowtie2-no-unal" class="option-checkbox" checked>
+                                Suppress Unaligned Reads
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Don't write unaligned reads to SAM output</div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="bowtie2-no-head" class="option-checkbox">
+                                Suppress SAM Header
+                            </label>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-left:1.5rem">Don't write SAM header lines</div>
+                        </div>
+
+                        <div class="options-actions">
+                            <button id="bowtie2-save-btn" class="btn-options btn-save-options">Save</button>
+                            <button id="bowtie2-reset-btn" class="btn-options btn-reset-options">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SwiftAMR Tool -->
+                <div class="tool-wrapper" style="margin-bottom:0.75rem">
+                    <div id="swiftamr-tool" class="tool-card" data-tool="swiftamr" draggable="true">
+                        <span style="font-size:1.5rem;margin-right:0.5rem">⚡</span>
+                        <div style="flex:1">
+                            <div style="font-weight:600;font-size:0.875rem">SwiftAMR</div>
+                            <div style="font-size:0.7rem;color:var(--text-light)">Fast k-mer AMR gene detection</div>
+                        </div>
+                        <svg id="swiftamr-chevron" style="width:1rem;height:1rem;color:var(--text-light);transition:transform 0.2s" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                        </svg>
+                    </div>
+
+                    <div id="swiftamr-options" class="tool-options">
+                        <div class="option-group">
+                            <label class="option-label">AMR Database</label>
+                            <input type="file" id="swiftamr-database" accept=".fasta,.fa,.fna" class="option-input" style="padding:0.5rem">
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">Upload AMR gene database in FASTA format (e.g., CARD, MEGARes, ResFinder)</div>
+                            <div id="swiftamr-db-status" style="font-size:0.7rem;margin-top:0.5rem;padding:0.5rem;border-radius:0.375rem;display:none"></div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label">Output Format</label>
+                            <select id="swiftamr-format" class="option-input">
+                                <option value="tsv">TSV (Tab-separated)</option>
+                            </select>
+                            <div style="font-size:0.65rem;color:var(--text-light);margin-top:0.25rem">Results include: read name, gene, k-mer score, coverage, identity</div>
+                        </div>
+
+                        <div class="options-actions">
+                            <button id="swiftamr-save-btn" class="btn-options btn-save-options">Save</button>
+                            <button id="swiftamr-reset-btn" class="btn-options btn-reset-options">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Hero Section (shown when no files) -->
+            <!-- height changed from 100vh -> 100% so hero fits into app-layout (which reserves footer) -->
+            <section id="hero-section" style="display:flex;flex-direction:column;height:100%;padding:0;max-width:none;margin:0">
+                <div style="text-align:center;padding:2rem 1rem 1.5rem 1rem">
+                    <span class="badge">powered by webassembly ✨</span>
+                    <h1 style="font-size:2rem;margin-bottom:0.5rem">
+                        <span id="hero-text" class="hero-text"></span> bioinformatics.<br>
+                        entirely in your browser.
+                    </h1>
+                    <p style="color:var(--text-light);margin-bottom:0.5rem;font-size:0.875rem">
+                        no queues. no ssh. no code. just results.
+                    </p>
+                    <p style="color:var(--text-light);font-size:0.8rem;max-width:35rem;margin-left:auto;margin-right:auto">
+                        To get started, just upload FASTQ or FASTA files below, then drag tools from the left panel onto files to run analysis. All processing happens locally - your data never leaves your device.
+                    </p>
+                </div>
+                
+                <!-- allow the upload area to shrink so it doesn't force page overflow -->
+                <label for="file-upload" id="upload-area" style="flex:1;min-height:0;margin:0 1rem 1rem 1rem">
+                    <div id="upload-icon">
+                        <svg style="width:3rem;height:3rem;color:var(--text-lighter);margin-bottom:1rem" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                        </svg>
+                    </div>
+                    <div id="upload-text" style="color:var(--text-light);font-size:1rem">
+                        drag & drop <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fastq</code> or <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fasta</code> files, or click to browse
+                    </div>
+                    <input id="file-upload" type="file" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz,.fasta,.fa,.fasta.gz,.fa.gz,application/gzip,application/x-gzip" multiple>
+                </label>
+            </section>
+
+            <!-- Files Section Template (will be inserted after upload) -->
+            <template id="files-section-template">
+              <section class="section" id="files-section">
+                  <label for="file-upload-hidden" id="upload-area-small" style="padding:0.5rem 0.75rem;display:flex;align-items:center;gap:0.75rem;border:2px dashed var(--border);border-radius:0.5rem;background:var(--bg);cursor:pointer;margin-bottom:0.75rem">
+                      <div id="upload-icon-small">
+                          <svg style="width:1.5rem;height:1.5rem;color:var(--text-lighter);margin-bottom:0.25rem" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                          </svg>
+                      </div>
+                      <div id="upload-text-small" style="color:var(--text-light);font-size:0.875rem;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                          drag & drop <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fastq</code> or <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fasta</code> files, or click to browse
+                      </div>
+                      <input id="file-upload-hidden" type="file" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz,.fasta,.fa,.fasta.gz,.fa.gz,application/gzip,application/x-gzip" multiple>
+                  </label>
+                  <div style="font-size:0.75rem;color:var(--text-light);margin-bottom:0.75rem">
+                      <span id="file-stats-inline"></span>
+                  </div>
+                  <div id="file-actions" class="hidden" style="margin-bottom:0.75rem;gap:0.5rem;justify-content:flex-end;flex-shrink:0;display:flex">
+                      <button id="run-all-pending-btn" class="btn-small hidden" style="background:#3b82f6;color:white">
+                          Run All Pending
+                      </button>
+                      <button id="download-selected-btn" class="btn-small hidden" style="background:var(--brand);color:white">
+                          Download Selected
+                      </button>
+                      <button id="download-all-btn" class="btn-small hidden" style="background:#10b981;color:white">
+                          Download All Results
+                      </button>
+                  </div>
+                  <div id="file-list-container" style="flex:1;flex-direction:column;min-height:0;display:flex">
+                      <div class="file-list-wrapper" style="flex:1;min-height:0">
+                          <table class="file-table">
+                              <thead>
+                                  <tr>
+                                      <th style="width:3%;min-width:30px">
+                                          <input type="checkbox" id="select-all" title="Select all">
+                                      </th>
+                                      <th style="width:30%;min-width:100px">
+                                          File
+                                      </th>
+                                      <th style="width:25%;min-width:100px">
+                                          Nickname
+                                      </th>
+                                      <th style="width:12%;min-width:60px">
+                                          Size
+                                      </th>
+                                      <th style="width:15%;min-width:80px">
+                                          Status
+                                      </th>
+                                      <th style="width:10%;min-width:50px">
+                                          Type
+                                      </th>
+                                      <th style="width:5%;min-width:40px"></th>
+                                  </tr>
+                              </thead>
+                              <tbody id="file-list"></tbody>
+                          </table>
+                      </div>
+                      <div style="margin-top:0.5rem;text-align:right">
+                          <button id="clear-all" class="btn-small" style="background:var(--text-light)">clear all</button>
+                      </div>
+                  </div>
+              </section>
+            </template>
+
+        </main>
+    </div>
+
+    <!-- full-width footer across bottom -->
+    <div style="width:100%;position:fixed;bottom:0;left:0;height:var(--footer-height);display:flex;align-items:center;justify-content:center;border-top:1px solid var(--border);background:var(--card);z-index:20;padding:0">
+        <p style="font-size:0.75rem;color:var(--text-light);margin:0">
+            built with <a href="https://biowasm.com" target="_blank">biowasm</a> · your data never leaves your browser
+        </p>
+    </div>
+
+    <script>
+        // Hero Typing Animation - Looping with backspace
+        function typeHeroText() {
+            const heroText = document.getElementById('hero-text');
+            const words = ['blazing fast', 'reproducible', 'secure', 'hassle-free'];
+            let wordIndex = 0;
+            let charIndex = 0;
+            let isDeleting = false;
+            const typingSpeed = 30; // milliseconds per character
+            const deletingSpeed = 20; // milliseconds per backspace
+            const pauseAfterWord = 1500; // pause after typing complete word
+            const pauseAfterDelete = 500; // pause after deleting
+            
+            function type() {
+                const currentWord = words[wordIndex];
+                
+                if (isDeleting) {
+                    // Backspace
+                    heroText.textContent = currentWord.substring(0, charIndex - 1);
+                    charIndex--;
+                    
+                    if (charIndex === 0) {
+                        isDeleting = false;
+                        wordIndex = (wordIndex + 1) % words.length;
+                        setTimeout(type, pauseAfterDelete);
+                    } else {
+                        setTimeout(type, deletingSpeed);
+                    }
+                } else {
+                    // Type forward
+                    heroText.textContent = currentWord.substring(0, charIndex + 1);
+                    charIndex++;
+                    
+                    if (charIndex === currentWord.length) {
+                        isDeleting = true;
+                        setTimeout(type, pauseAfterWord);
+                    } else {
+                        setTimeout(type, typingSpeed);
+                    }
+                }
+                
+                // Add cursor
+                heroText.innerHTML += '<span class="typing-cursor"></span>';
+            }
+            
+            type();
+        }
+        
+        // Start typing animation on load
+        window.addEventListener('DOMContentLoaded', typeHeroText);
+        
+        // State
+        let fastpWorker = null;
+        let currentToolName = null; // Track which tool the worker is initialized for
+        let selectedFiles = [];
+        let selectedFileIndices = new Set();
+        let isInitialized = false;
+        let draggedTool = null;
+        let workerBusy = false;
+        let jobQueue = [];
+        let isProcessingQueue = false;
+
+        // DOM Elements
+        const heroSection = document.getElementById('hero-section');
+        const filesSection = document.getElementById('files-section');
+        const uploadArea = document.getElementById('upload-area');
+        const uploadAreaSmall = document.getElementById('upload-area-small');
+        const uploadIcon = document.getElementById('upload-icon');
+        const uploadText = document.getElementById('upload-text');
+        const fileUpload = document.getElementById('file-upload');
+        const fileUploadHidden = document.getElementById('file-upload-hidden');
+        const fileListContainer = document.getElementById('file-list-container');
+        const fileList = document.getElementById('file-list');
+        const fileStatsInline = document.getElementById('file-stats-inline');
+        const clearAllButton = document.getElementById('clear-all');
+        const fileActions = document.getElementById('file-actions');
+        
+        
+
+        // --- File Handling ---
+        async function handleFiles(files) {
+            if (!files || files.length === 0) return;
+            const filesArray = Array.from(files);
+
+            // Check for large files and warn user
+            const MAX_RECOMMENDED_SIZE = 500 * 1024 * 1024; // 500 MB
+            const ABSOLUTE_MAX_SIZE = 1024 * 1024 * 1024; // 1 GB
+            const largeFiles = filesArray.filter(f => f.size > MAX_RECOMMENDED_SIZE);
+            const tooLargeFiles = filesArray.filter(f => f.size > ABSOLUTE_MAX_SIZE);
+
+            if (tooLargeFiles.length > 0) {
+                const fileList = tooLargeFiles.map(f => `${f.name} (${formatBytes(f.size)})`).join('\n');
+                alert(`The following files are too large for browser processing (>1GB):\n\n${fileList}\n\nBrowser memory limitations prevent processing files this large. Please use smaller files or process them on a server.`);
+                return;
+            }
+
+            if (largeFiles.length > 0) {
+                const fileList = largeFiles.map(f => `${f.name} (${formatBytes(f.size)})`).join('\n');
+                const proceed = confirm(`Warning: The following files are very large:\n\n${fileList}\n\nProcessing files over 500MB may cause browser slowdowns or crashes due to memory limitations. Continue anyway?`);
+                if (!proceed) return;
+            }
+
+            for (const file of filesArray) {
+                if (!selectedFiles.find(f => f.file.name === file.name && f.file.size === file.size)) {
+                    selectedFiles.push({
+                        file: file,
+                        customName: file.name,
+                        cachedData: null,
+                        status: 'idle',
+                        pendingTool: null,
+                        lastTool: null,
+                        results: [],
+                        resultsExpanded: false,
+                        terminalExpanded: false,
+                        logs: [],
+                        isOutputFile: false,
+                        parentFileIndex: null,
+                        depth: 0,
+                        pairedWith: null  // Index of paired file if PE
+                    });
+                }
+            }
+
+            // Detect and link paired-end files
+            detectPairedEndFiles();
+
+            // Check paired file sizes
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const fileObj = selectedFiles[i];
+                if (fileObj.pairedWith !== null && i < fileObj.pairedWith) {
+                    // Only check once per pair (when processing R1)
+                    const pairedObj = selectedFiles[fileObj.pairedWith];
+                    const totalSize = fileObj.file.size + pairedObj.file.size;
+
+                    if (totalSize > ABSOLUTE_MAX_SIZE) {
+                        alert(`Paired files are too large for browser processing:\n\n${fileObj.file.name} (${formatBytes(fileObj.file.size)})\n${pairedObj.file.name} (${formatBytes(pairedObj.file.size)})\nTotal: ${formatBytes(totalSize)}\n\nCombined size exceeds 1GB limit. Please use smaller files or process on a server.`);
+                        // Remove both files
+                        selectedFiles.splice(Math.max(i, fileObj.pairedWith), 1);
+                        selectedFiles.splice(Math.min(i, fileObj.pairedWith), 1);
+                        continue;
+                    }
+
+                    if (totalSize > MAX_RECOMMENDED_SIZE) {
+                        const proceed = confirm(`Warning: Paired files are very large:\n\n${fileObj.file.name} (${formatBytes(fileObj.file.size)})\n${pairedObj.file.name} (${formatBytes(pairedObj.file.size)})\nTotal: ${formatBytes(totalSize)}\n\nProcessing large paired files may cause browser slowdowns or crashes. Continue anyway?`);
+                        if (!proceed) {
+                            // Remove both files
+                            selectedFiles.splice(Math.max(i, fileObj.pairedWith), 1);
+                            selectedFiles.splice(Math.min(i, fileObj.pairedWith), 1);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // If this is the first file, swap hero for files section
+            if (selectedFiles.length > 0 && !document.getElementById('files-section')) {
+                const mainContent = document.querySelector('.main-content');
+                // Remove hero section
+                const hero = document.getElementById('hero-section');
+                if (hero) hero.remove();
+                // Insert files section from template
+                const tpl = document.getElementById('files-section-template');
+                if (tpl) {
+                  mainContent.appendChild(tpl.content.cloneNode(true));
+                }
+                // Re-bind DOM elements for files section
+                rebindFilesSectionElements();
+            }
+            updateFileList();
+        }
+
+        // Detect and link paired-end files
+        function detectPairedEndFiles() {
+            // Patterns for R1/R2 naming:
+            // sample_R1.fastq / sample_R2.fastq
+            // sample_1.fastq / sample_2.fastq
+            // sample.R1.fastq / sample.R2.fastq
+            // sample.1.fastq / sample.2.fastq
+            const r1Patterns = [/_R?1[_\.]/i, /\.R?1\./i, /_R?1\.(fastq|fq)/i];
+            const r2Patterns = [/_R?2[_\.]/i, /\.R?2\./i, /_R?2\.(fastq|fq)/i];
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file1 = selectedFiles[i];
+                if (file1.pairedWith !== null || file1.isOutputFile) continue;
+
+                const name1 = file1.file.name;
+
+                // Check if this is R1
+                const isR1 = r1Patterns.some(pattern => pattern.test(name1));
+                if (!isR1) continue;
+
+                // Try to find matching R2
+                const baseName = name1.replace(/_R?1([_\.])/i, '_R?2$1')
+                                      .replace(/\.R?1\./i, '.R?2.')
+                                      .replace(/_R?1\.(fastq|fq)/i, '_R?2.$1');
+
+                for (let j = 0; j < selectedFiles.length; j++) {
+                    if (i === j) continue;
+                    const file2 = selectedFiles[j];
+                    if (file2.pairedWith !== null || file2.isOutputFile) continue;
+
+                    const name2 = file2.file.name;
+                    const isR2 = r2Patterns.some(pattern => pattern.test(name2));
+
+                    if (isR2) {
+                        // Check if base names match
+                        const base1 = name1.replace(/_R?1([_\.])/i, '_X$1')
+                                          .replace(/\.R?1\./i, '.X.')
+                                          .replace(/_R?1\.(fastq|fq)/i, '_X.$1');
+                        const base2 = name2.replace(/_R?2([_\.])/i, '_X$1')
+                                          .replace(/\.R?2\./i, '.X.')
+                                          .replace(/_R?2\.(fastq|fq)/i, '_X.$1');
+
+                        if (base1 === base2) {
+                            // Found a pair!
+                            file1.pairedWith = j;
+                            file2.pairedWith = i;
+                            console.log(`Detected paired files: ${name1} <-> ${name2}`);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Helper to rebind DOM elements after files section is inserted
+        function rebindFilesSectionElements() {
+            const uploadAreaSmall = document.getElementById('upload-area-small');
+            const fileUploadHidden = document.getElementById('file-upload-hidden');
+            const fileListContainer = document.getElementById('file-list-container');
+            const fileList = document.getElementById('file-list');
+            const fileStatsInline = document.getElementById('file-stats-inline');
+            const clearAllButton = document.getElementById('clear-all');
+            const fileActions = document.getElementById('file-actions');
+
+            // Store references globally if needed
+            window.uploadAreaSmall = uploadAreaSmall;
+            window.fileUploadHidden = fileUploadHidden;
+            window.fileListContainer = fileListContainer;
+            window.fileList = fileList;
+            window.fileStatsInline = fileStatsInline;
+            window.clearAllButton = clearAllButton;
+            window.fileActions = fileActions;
+
+            // Re-attach listeners
+            if (fileUploadHidden) fileUploadHidden.addEventListener('change', (e) => { handleFiles(e.target.files); });
+            if (uploadAreaSmall) {
+                uploadAreaSmall.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (!uploadAreaSmall.classList.contains('disabled')) {
+                        uploadAreaSmall.classList.add('drag-over');
+                    }
+                });
+                uploadAreaSmall.addEventListener('dragleave', (e) => {
+                    e.preventDefault();
+                    uploadAreaSmall.classList.remove('drag-over');
+                });
+                uploadAreaSmall.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    uploadAreaSmall.classList.remove('drag-over');
+                    if (!uploadAreaSmall.classList.contains('disabled')) {
+                        handleFiles(e.dataTransfer.files);
+                    }
+                });
+            }
+            if (clearAllButton) clearAllButton.addEventListener('click', () => {
+                if (confirm('Remove all files?')) {
+                    selectedFiles = [];
+                    // Remove files section and restore hero
+                    const filesSection = document.getElementById('files-section');
+                    if (filesSection) filesSection.remove();
+                    restoreHeroSection();
+                }
+            });
+            // Select All checkbox
+            const selectAll = document.getElementById('select-all');
+            if (selectAll) selectAll.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    selectedFileIndices.clear();
+                    selectedFiles.forEach((_, index) => selectedFileIndices.add(index));
+                } else {
+                    selectedFileIndices.clear();
+                }
+                updateFileList();
+            });
+            // Action buttons
+            const runAllPendingBtn = document.getElementById('run-all-pending-btn');
+            if (runAllPendingBtn) runAllPendingBtn.addEventListener('click', runAllPending);
+            const downloadSelectedBtn = document.getElementById('download-selected-btn');
+            if (downloadSelectedBtn) downloadSelectedBtn.addEventListener('click', downloadSelectedResults);
+            const downloadAllBtn = document.getElementById('download-all-btn');
+            if (downloadAllBtn) downloadAllBtn.addEventListener('click', downloadAllResults);
+        }
+
+        // Restore hero section if all files are cleared
+        function restoreHeroSection() {
+            const mainContent = document.querySelector('.main-content');
+            if (!document.getElementById('hero-section')) {
+                // Recreate hero section (minimal, could be improved)
+                const hero = document.createElement('section');
+                hero.id = 'hero-section';
+                hero.style.display = 'flex';
+                hero.style.flexDirection = 'column';
+                hero.style.height = '100%';
+                hero.style.padding = '0';
+                hero.style.maxWidth = 'none';
+                hero.style.margin = '0';
+                hero.innerHTML = `
+                  <div style="text-align:center;padding:2rem 1rem 1.5rem 1rem">
+                      <span class="badge">powered by webassembly ✨</span>
+                      <h1 style="font-size:2rem;margin-bottom:0.5rem">
+                          <span id="hero-text" class="hero-text"></span> bioinformatics.<br>
+                          entirely in your browser.
+                      </h1>
+                      <p style="color:var(--text-light);margin-bottom:0.5rem;font-size:0.875rem">
+                          no queues. no HPC. no ssh. just results.
+                      </p>
+                      <p style="color:var(--text-light);font-size:0.8rem;max-width:35rem;margin-left:auto;margin-right:auto">
+                          To get started, just upload FASTQ or FASTA files below, then drag tools from the left panel onto files to run analysis. All processing happens locally - your data never leaves your device.
+                      </p>
+                  </div>
+                  <label for="file-upload" id="upload-area" style="flex:1;min-height:0;margin:0 1rem 1rem 1rem">
+                      <div id="upload-icon">
+                          <svg style="width:3rem;height:3rem;color:var(--text-lighter);margin-bottom:1rem" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                          </svg>
+                      </div>
+                      <div id="upload-text" style="color:var(--text-light);font-size:1rem">
+                          drag & drop <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fastq</code> or <code style="background:var(--border);padding:0 0.25rem;border-radius:0.25rem">.fasta</code> files, or click to browse
+                      </div>
+                      <input id="file-upload" type="file" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz,.fasta,.fa,.fasta.gz,.fa.gz,application/gzip,application/x-gzip" multiple>
+                  </label>
+                `;
+                mainContent.appendChild(hero);
+                // Re-bind upload area - must get fresh references from the DOM
+                const uploadArea = document.getElementById('upload-area');
+                const uploadIcon = document.getElementById('upload-icon');
+                const uploadText = document.getElementById('upload-text');
+                const fileUpload = document.getElementById('file-upload');
+
+                // Store in window for global access
+                window.uploadArea = uploadArea;
+                window.uploadIcon = uploadIcon;
+                window.uploadText = uploadText;
+                window.fileUpload = fileUpload;
+
+                // Add all event listeners using the fresh local references
+                if (fileUpload) {
+                    fileUpload.addEventListener('change', (e) => { handleFiles(e.target.files); });
+                }
+                if (uploadArea) {
+                    uploadArea.addEventListener('dragover', (e) => {
+                        e.preventDefault();
+                        if (!uploadArea.classList.contains('disabled')) {
+                            uploadArea.classList.add('drag-over');
+                        }
+                    });
+                    uploadArea.addEventListener('dragleave', (e) => {
+                        e.preventDefault();
+                        uploadArea.classList.remove('drag-over');
+                    });
+                    uploadArea.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        uploadArea.classList.remove('drag-over');
+                        if (!uploadArea.classList.contains('disabled')) {
+                            handleFiles(e.dataTransfer.files);
+                        }
+                    });
+                }
+                // Re-run hero typing animation
+                typeHeroText();
+            }
+        }
+
+        // Helper function to read file data (with caching)
+        async function getFileData(fileObj) {
+            // If already cached, return it
+            if (fileObj.cachedData) {
+                return fileObj.cachedData;
+            }
+            
+            // Otherwise, read it now and cache it
+            const arrayBuffer = await fileObj.file.arrayBuffer();
+            fileObj.cachedData = arrayBuffer; // Cache for future use
+            return arrayBuffer;
+        }
+
+        
+
+        function detectFileType(fileName) {
+            const name = fileName.toLowerCase();
+            if (name.match(/[_\.]r?1[_\.]/)) return 'R1';
+            if (name.match(/[_\.]r?2[_\.]/)) return 'R2';
+            if (name.includes('interleaved')) return 'INT';
+            return 'SE';
+        }
+
+        function updateFileList() {
+            // If no files, hide file list and actions (section is not present if no files)
+            if (selectedFiles.length === 0) {
+                const fileListContainer = document.getElementById('file-list-container');
+                const fileActions = document.getElementById('file-actions');
+                const fileStatsInline = document.getElementById('file-stats-inline');
+                if (fileListContainer) fileListContainer.style.display = 'none';
+                if (fileActions) fileActions.style.display = 'none';
+                if (fileStatsInline) fileStatsInline.textContent = '';
+                return;
+            }
+
+            // Show file list and actions
+            const fileListContainer = document.getElementById('file-list-container');
+            const fileActions = document.getElementById('file-actions');
+            if (fileListContainer) fileListContainer.style.display = 'flex';
+            if (fileActions) fileActions.style.display = 'flex';
+            
+            // Update file table
+            const fileList = document.getElementById('file-list');
+            if (!fileList) return;
+
+            let tableHTML = '';
+            selectedFiles.forEach((fileObj, index) => {
+                // Skip R2 files when paired (they'll be shown with R1)
+                if (fileObj.pairedWith !== null && detectFileType(fileObj.file.name) === 'R2') {
+                    return;
+                }
+
+                const hasPendingTool = fileObj.pendingTool !== null;
+                const indentPadding = fileObj.depth * 1.5;
+                const treePrefix = fileObj.depth > 0 ? '└─ ' : '';
+
+                const toolDisplay = hasPendingTool ? `
+                    <div style="display:flex;align-items:center;gap:0.25rem;margin-top:0.25rem">
+                                <span style="background:#fef3c7;padding:0.125rem 0.5rem;border-radius:0.25rem;font-size:0.75rem;border:1px solid var(--brand)">
+                            ${getToolIcon(fileObj.pendingTool)} ${fileObj.pendingTool}
+                        </span>
+                        <button onclick="runPendingTool(${index}); event.stopPropagation()" 
+                                class="btn-small" 
+                                style="background:var(--brand);color:white;padding:0.25rem 0.5rem"
+                                ${fileObj.status === 'running' ? 'disabled' : ''}>
+                            Run
+                        </button>
+                        <button onclick="clearPendingTool(${index}); event.stopPropagation()" 
+                                class="btn-small" 
+                                style="background:var(--text-light);color:white;padding:0.25rem 0.5rem"
+                                ${fileObj.status === 'running' ? 'disabled' : ''}>
+                            Clear
+                        </button>
+                    </div>
+                ` : '';
+                
+                tableHTML += `
+                    <tr data-file-index="${index}" class="${selectedFileIndices.has(index) ? 'selected' : ''}" style="${fileObj.isOutputFile ? 'background:#f8fafc' : ''}">
+                        <td style="text-align:center">
+                            <input type="checkbox" ${selectedFileIndices.has(index) ? 'checked' : ''}
+                                   onchange="toggleFileSelection(${index})"
+                                   onclick="event.stopPropagation()">
+                        </td>
+                        <td class="truncate" title="${fileObj.file.name}" style="padding-left:${0.25 + indentPadding}rem">
+                            <div style="display:flex;flex-direction:column;gap:0.25rem">
+                                <div style="display:flex;align-items:center;gap:0.5rem">
+                                    <span style="color:var(--text-lighter);margin-right:0.25rem">${treePrefix}</span>
+                                    <span>${fileObj.file.name}</span>
+                                    ${fileObj.pairedWith !== null ? `<span style="background:#e0f2fe;color:#0284c7;padding:0.125rem 0.5rem;border-radius:0.25rem;font-size:0.65rem;font-weight:600">PE 🔗</span>` : ''}
+                                </div>
+                                ${fileObj.pairedWith !== null ? `<div style="font-size:0.7rem;color:var(--text-lighter);padding-left:1rem">+ ${selectedFiles[fileObj.pairedWith].file.name}</div>` : ''}
+                            </div>
+                            ${toolDisplay}
+                        </td>
+                        <td>
+                            <input type="text" value="${fileObj.customName}"
+                                   onchange="updateNickname(${index}, this.value)"
+                                   placeholder="Enter nickname"
+                                   onclick="event.stopPropagation()">
+                        </td>
+                        <td style="color:var(--text-light)">
+                            ${fileObj.pairedWith !== null ?
+                                `<div style="display:flex;flex-direction:column;gap:0.1rem;font-size:0.7rem">
+                                    <div>${formatBytes(fileObj.file.size + selectedFiles[fileObj.pairedWith].file.size)}</div>
+                                    <div style="color:var(--text-lighter);font-size:0.65rem">(${formatBytes(fileObj.file.size)} + ${formatBytes(selectedFiles[fileObj.pairedWith].file.size)})</div>
+                                </div>` :
+                                formatBytes(fileObj.file.size)
+                            }
+                        </td>
+                        <td>
+                            <div style="display:flex;align-items:center;gap:0.25rem">
+                                <span class="status-indicator status-${fileObj.status}"></span>
+                                <span style="font-size:0.75rem;flex:1">${getStatusText(fileObj.status, fileObj)}</span>
+                                ${fileObj.status === 'queued' ? `
+                                    <button onclick="cancelQueuedJob(${index}); event.stopPropagation()"
+                                            class="btn-small"
+                                            style="background:#ef4444;color:white;padding:0.125rem 0.375rem;font-size:0.65rem"
+                                            title="Cancel queued job">
+                                        ✕
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </td>
+                        <td style="color:var(--text-light);text-align:center">${detectFileType(fileObj.file.name)}</td>
+                        <td style="text-align:center">
+                            <button onclick="removeFile(${index}); event.stopPropagation()"
+                                    style="color:var(--text-lighter);padding:0.25rem;cursor:pointer;background:none;border:none"
+                                    title="Remove file">
+                                <svg style="width:1rem;height:1rem" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </td>
+                    </tr>
+                    ${fileObj.results.length > 0 || fileObj.logs.length > 0 ? `
+                    <tr class="results-row visible">
+                        <td colspan="7" style="padding:0.5rem 0.25rem 0.5rem ${0.5 + (fileObj.depth * 1.5)}rem;border-top:none">
+                            ${fileObj.results.length > 0 ? `
+                            <div style="display:flex;justify-content:space-between;align-items:center;padding:0.25rem 0;cursor:pointer" onclick="toggleResults(${index})">
+                                <div style="display:flex;align-items:center;gap:0.5rem">
+                                    <svg style="width:0.75rem;height:0.75rem;transform:rotate(${fileObj.resultsExpanded ? '0' : '-90'}deg);transition:transform 0.2s;color:var(--text-light)" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                    </svg>
+                                    <span style="font-size:0.7rem;color:var(--text-light)">Results (${fileObj.results.length})</span>
+                                </div>
+                                <button onclick="downloadAllForFile(${index}); event.stopPropagation()" class="btn-small" style="padding:0.125rem 0.5rem;background:var(--brand);color:white;font-size:0.7rem">
+                                    Download All
+                                </button>
+                            </div>
+
+                            <div style="display:${fileObj.resultsExpanded ? 'block' : 'none'};padding-top:0.25rem">
+                                ${fileObj.results.map((result, rIdx) => {
+                                    const isProcessableFile = result.name.match(/\.(fastq|fq|fasta|fa)(\.gz)?$/i);
+                                    const isAlreadyAdded = selectedFiles.find(f => f.isOutputFile && f.file.name === result.name && f.parentFileIndex === index);
+                                    return `
+                                    <div style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.7rem;color:var(--text-light)">
+                                        <input type="checkbox" id="result-${index}-${rIdx}" onclick="event.stopPropagation()">
+                                        <span style="background:#e4e4e7;padding:0.125rem 0.375rem;border-radius:0.25rem;font-size:0.65rem;font-weight:600;color:var(--text-light)">${getFileIcon(result.name)}</span>
+                                        <span style="flex:1" title="${result.name}">${result.name}</span>
+                                        <span style="font-size:0.65rem">${formatBytes(result.size || 0)}</span>
+                                        ${isProcessableFile ? (isAlreadyAdded ?
+                                            `<button class="btn-small" style="padding:0.125rem 0.375rem;background:#d1d5db;color:var(--text-light);cursor:not-allowed;font-size:0.65rem" disabled>Added</button>` :
+                                            `<button onclick="addResultAsFile(${index}, ${rIdx}); event.stopPropagation()" class="btn-small" style="padding:0.125rem 0.375rem;background:#10b981;color:white;font-size:0.65rem" title="Add as file for further processing">Add</button>`) : ''}
+                                        <button onclick="downloadSingleResult('${result.name}'); event.stopPropagation()" class="btn-small" style="padding:0.125rem 0.375rem;font-size:0.65rem">↓</button>
+                                    </div>
+                                `;}).join('')}
+                            </div>
+                            ` : ''}
+
+                            ${fileObj.logs.length > 0 ? `
+                                <div style="margin-top:${fileObj.results.length > 0 ? '0.5rem' : '0'};padding-top:${fileObj.results.length > 0 ? '0.5rem' : '0'};border-top:none">
+                                    <button onclick="toggleTerminalForFile(${index}); event.stopPropagation()" style="display:flex;align-items:center;gap:0.5rem;background:none;border:none;padding:0;cursor:pointer;font-size:0.7rem;color:var(--text-light);margin-bottom:0.25rem">
+                                        <svg style="width:0.75rem;height:0.75rem;transform:rotate(${fileObj.terminalExpanded ? '0' : '-90'}deg);transition:transform 0.2s" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                        </svg>
+                                        <span>Terminal Output ${fileObj.status === 'running' ? '(Running...)' : ''}</span>
+                                    </button>
+                                    <div style="display:${fileObj.terminalExpanded ? 'block' : 'none'};background:#18181b;color:#4ade80;padding:0.5rem;border-radius:0.25rem;font-size:0.65rem;max-height:12rem;overflow-y:auto;font-family:monospace">
+                                        <pre style="margin:0;white-space:pre-wrap">${escapeHtml(fileObj.logs.join('\n'))}</pre>
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </td>
+                    </tr>
+                    ` : ''}
+                `;
+            });
+            fileList.innerHTML = tableHTML;
+            
+            // Update stats
+            updateStats();
+            
+            // Update action buttons
+            updateDownloadButtons();
+        }
+        
+        function updateStats() {
+            // Total files
+            const fileCount = selectedFiles.length;
+
+            // Total size
+            const totalSize = selectedFiles.reduce((sum, f) => sum + f.file.size, 0);
+
+            // File types breakdown
+            const types = {};
+            selectedFiles.forEach(f => {
+                const type = detectFileType(f.file.name);
+                types[type] = (types[type] || 0) + 1;
+            });
+            const typesText = Object.entries(types)
+                .map(([type, count]) => `${type}: ${count}`)
+                .join(' · ');
+
+            // Update inline stats
+            const fileStatsInline = document.getElementById('file-stats-inline');
+            if (fileStatsInline) {
+                fileStatsInline.textContent = `${fileCount} file${fileCount !== 1 ? 's' : ''} · ${formatBytes(totalSize)} total · ${typesText}`;
+            }
+        }
+
+        function updateNickname(index, newName) {
+            if (selectedFiles[index]) {
+                selectedFiles[index].customName = newName || selectedFiles[index].file.name;
+            }
+        }
+
+        function removeFile(index) {
+            // Remove the file and all its children recursively
+            const filesToRemove = [index];
+            
+            // Find all children of this file
+            for (let i = selectedFiles.length - 1; i >= 0; i--) {
+                if (selectedFiles[i].parentFileIndex === index) {
+                    filesToRemove.push(i);
+                    // Also find children of this child (recursive)
+                    for (let j = selectedFiles.length - 1; j >= 0; j--) {
+                        if (selectedFiles[j].parentFileIndex === i) {
+                            filesToRemove.push(j);
+                        }
+                    }
+                }
+            }
+            
+            // Sort in descending order to remove from end first
+            filesToRemove.sort((a, b) => b - a);
+            
+            // Remove all files
+            filesToRemove.forEach(idx => {
+                selectedFiles.splice(idx, 1);
+            });
+            
+            // Update parent indices for remaining files
+            selectedFiles.forEach((f, newIndex) => {
+                if (f.parentFileIndex !== null) {
+                    // Find the new index of the parent
+                    const parentFile = selectedFiles.find((pf, pi) => {
+                        return pi < newIndex && pf.file.name === selectedFiles[f.parentFileIndex]?.file?.name;
+                    });
+                    if (parentFile) {
+                        f.parentFileIndex = selectedFiles.indexOf(parentFile);
+                    }
+                }
+            });
+            
+            updateFileList();
+        }
+        
+        function runPendingTool(index) {
+            const fileObj = selectedFiles[index];
+            if (!fileObj || !fileObj.pendingTool) return;
+
+            const toolName = fileObj.pendingTool;
+
+            // If this file is paired, run tool on both files together
+            if (fileObj.pairedWith !== null) {
+                const pairedFileObj = selectedFiles[fileObj.pairedWith];
+
+                // Clear pending on both
+                fileObj.pendingTool = null;
+                pairedFileObj.pendingTool = null;
+                updateFileList();
+
+                // Run tool on the pair (pass R1 index, tool will handle PE mode)
+                const r1Index = detectFileType(fileObj.file.name) === 'R1' ? index : fileObj.pairedWith;
+                runToolOnPairedFiles(toolName, r1Index);
+            } else {
+                fileObj.pendingTool = null; // Clear pending
+                updateFileList();
+                runToolOnFile(toolName, index);
+            }
+        }
+
+        function clearPendingTool(index) {
+            if (selectedFiles[index]) {
+                const fileObj = selectedFiles[index];
+                fileObj.pendingTool = null;
+
+                // Also clear paired file if exists
+                if (fileObj.pairedWith !== null) {
+                    selectedFiles[fileObj.pairedWith].pendingTool = null;
+                }
+
+                updateFileList();
+            }
+        }
+
+        function assignToolToFile(toolName, fileIndex) {
+            const fileObj = selectedFiles[fileIndex];
+            if (!fileObj) return;
+
+            // Validate file type for tool
+            const fileName = fileObj.file.name;
+            if (toolName === 'bowtie2') {
+                if (!fileName.match(/\.(fastq|fq)(\.gz)?$/i)) {
+                    alert(`Bowtie2 requires FASTQ files (.fastq or .fq)\n\nYour file: ${fileName}\n\nFASTA files (.fasta/.fa) cannot be used for alignment because they lack quality scores.`);
+                    return;
+                }
+
+                // Bowtie2 is memory-intensive - warn for files >200MB
+                const BOWTIE2_RECOMMENDED_MAX = 200 * 1024 * 1024; // 200MB
+                let totalSize = fileObj.file.size;
+                let fileInfo = `${fileName} (${formatBytes(totalSize)})`;
+
+                // Check paired file size too
+                if (fileObj.pairedWith !== null) {
+                    const pairedObj = selectedFiles[fileObj.pairedWith];
+                    totalSize += pairedObj.file.size;
+                    fileInfo = `${fileName} + ${pairedObj.file.name}\nTotal: ${formatBytes(totalSize)}`;
+                }
+
+                if (totalSize > BOWTIE2_RECOMMENDED_MAX) {
+                    const proceed = confirm(`⚠️ Bowtie2 Memory Warning\n\nAlignment is very memory-intensive. Your file(s):\n${fileInfo}\n\nRecommended maximum: ${formatBytes(BOWTIE2_RECOMMENDED_MAX)}\n\nLarge files may cause:\n• Browser slowdown or freezing\n• Out of memory errors\n• Tab crashes\n\nFor files this large, consider:\n• Subsampling your data (e.g., first 1M reads)\n• Using a server/HPC cluster instead\n\nContinue anyway?`);
+                    if (!proceed) return;
+                }
+            }
+
+            // If this file is paired, assign the tool to both files as a pair
+            if (fileObj.pairedWith !== null) {
+                const pairedFileObj = selectedFiles[fileObj.pairedWith];
+                fileObj.pendingTool = toolName;
+                pairedFileObj.pendingTool = toolName;
+                console.log(`Assigned ${toolName} to paired files: ${fileObj.file.name} & ${pairedFileObj.file.name}`);
+            } else {
+                fileObj.pendingTool = toolName;
+            }
+
+            updateFileList();
+        }
+
+        function downloadAllForFile(fileIndex) {
+            const fileObj = selectedFiles[fileIndex];
+            if (!fileObj || !fileObj.results || fileObj.results.length === 0) return;
+            
+            const zip = new JSZip();
+            const folderName = fileObj.customName.replace(/[^a-zA-Z0-9]/g, '_');
+            
+            // Add all result files
+            fileObj.results.forEach(result => {
+                zip.file(`${folderName}/${result.name}`, result.data);
+            });
+            
+            // Add terminal output if available
+            if (fileObj.logs.length > 0) {
+                zip.file(`${folderName}/terminal_output.txt`, fileObj.logs.join('\n'));
+            }
+            
+            zip.generateAsync({ type: 'blob', compression: 'DEFLATE' }).then(zipBlob => {
+                const url = URL.createObjectURL(zipBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${folderName}_results.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+        }
+
+        window.updateNickname = updateNickname;
+        window.removeFile = removeFile;
+        window.toggleFileSelection = toggleFileSelection;
+        window.toggleResults = toggleResults;
+        window.downloadSingleResult = downloadSingleResult;
+        window.downloadSelectedResults = downloadSelectedResults;
+        window.downloadAllResults = downloadAllResults;
+        window.downloadAllForFile = downloadAllForFile;
+        window.runPendingTool = runPendingTool;
+        window.clearPendingTool = clearPendingTool;
+        window.toggleTerminalForFile = toggleTerminalForFile;
+        window.addResultAsFile = addResultAsFile;
+        window.cancelQueuedJob = cancelQueuedJob;
+
+        function getToolIcon(toolName) {
+            const icons = {
+                'fastp': '🔬',
+                'bowtie2': '🧬'
+            };
+            return icons[toolName] || '🔧';
+        }
+
+        function getStatusText(status, fileObj) {
+            if (status === 'success' && fileObj.lastTool) {
+                return `${getToolIcon(fileObj.lastTool)} ${fileObj.lastTool} ✓`;
+            }
+            if (status === 'queued') {
+                // Find position in queue
+                const queuePosition = jobQueue.findIndex(job => job.fileIndex === selectedFiles.indexOf(fileObj));
+                if (queuePosition >= 0) {
+                    return `Queued (${queuePosition + 1}/${jobQueue.length})`;
+                }
+            }
+            const statusMap = {
+                'idle': 'Ready',
+                'queued': 'Queued...',
+                'running': 'Running...',
+                'success': 'Complete',
+                'error': 'Error'
+            };
+            return statusMap[status] || 'Ready';
+        }
+
+        function toggleTerminalForFile(index) {
+            selectedFiles[index].terminalExpanded = !selectedFiles[index].terminalExpanded;
+            updateFileList();
+        }
+
+        function addResultAsFile(parentIndex, resultIndex) {
+            const parentFile = selectedFiles[parentIndex];
+            if (!parentFile || !parentFile.results || !parentFile.results[resultIndex]) {
+                console.error('Invalid parent or result index');
+                return;
+            }
+            
+            const result = parentFile.results[resultIndex];
+            
+            // Check if this result is already added as a file
+            if (selectedFiles.find(f => f.isOutputFile && f.file.name === result.name && f.parentFileIndex === parentIndex)) {
+                console.log('This result is already added as a file');
+                return;
+            }
+            
+            // Create a File object from the result data
+            const blob = new Blob([result.data], { type: result.type });
+            const file = new File([blob], result.name, { type: result.type });
+            
+            // Calculate the insert position (right after parent and its existing children)
+            let insertPosition = parentIndex + 1;
+            while (insertPosition < selectedFiles.length && selectedFiles[insertPosition].parentFileIndex === parentIndex) {
+                insertPosition++;
+            }
+            
+            // Create new file entry
+            const newFileEntry = {
+                file: file,
+                customName: result.name,
+                cachedData: result.data, // Already have the data
+                status: 'idle',
+                pendingTool: null,
+                lastTool: null,
+                results: [],
+                resultsExpanded: false,
+                terminalExpanded: false,
+                logs: [],
+                isOutputFile: true,
+                parentFileIndex: parentIndex,
+                depth: parentFile.depth + 1
+            };
+            
+            // Insert into selectedFiles at the calculated position
+            selectedFiles.splice(insertPosition, 0, newFileEntry);
+            
+            // Update indices of files that reference indices after the insertion point
+            selectedFiles.forEach(f => {
+                if (f.parentFileIndex !== null && f.parentFileIndex >= insertPosition) {
+                    f.parentFileIndex++;
+                }
+            });
+            
+            updateFileList();
+        }
+
+        function getFileIcon(filename) {
+            if (filename.endsWith('.html')) return 'HTML';
+            if (filename.endsWith('.json')) return 'JSON';
+            // Check for FASTQ files (with or without .gz)
+            if (filename.endsWith('.fastq.gz') || filename.endsWith('.fq.gz') ||
+                filename.endsWith('.fastq') || filename.endsWith('.fq')) return 'FASTQ';
+            // Check for FASTA files (with or without .gz)
+            if (filename.endsWith('.fasta.gz') || filename.endsWith('.fa.gz') ||
+                filename.endsWith('.fasta') || filename.endsWith('.fa')) return 'FASTA';
+            return 'FILE';
+        }
+
+        function toggleFileSelection(index) {
+            if (selectedFileIndices.has(index)) {
+                selectedFileIndices.delete(index);
+            } else {
+                selectedFileIndices.add(index);
+            }
+            updateFileList();
+        }
+
+        function toggleResults(index) {
+            selectedFiles[index].resultsExpanded = !selectedFiles[index].resultsExpanded;
+            updateFileList();
+        }
+
+        function updateDownloadButtons() {
+            const runAllPendingBtn = document.getElementById('run-all-pending-btn');
+            const downloadSelectedBtn = document.getElementById('download-selected-btn');
+            const downloadAllBtn = document.getElementById('download-all-btn');
+            
+            const hasPending = selectedFiles.some(f => f.pendingTool !== null);
+            const hasSelected = selectedFileIndices.size > 0;
+            const hasResults = selectedFiles.some(f => f.results && f.results.length > 0);
+            
+            runAllPendingBtn.classList.toggle('hidden', !hasPending);
+            downloadSelectedBtn.classList.toggle('hidden', !hasSelected || !hasResults);
+            downloadAllBtn.classList.toggle('hidden', !hasResults);
+        }
+
+        function runAllPending() {
+            const pendingFiles = selectedFiles.map((f, idx) => ({ file: f, index: idx }))
+                .filter(item => item.file.pendingTool !== null);
+            
+            if (pendingFiles.length === 0) {
+                return;
+            }
+            
+            // Run all pending tools
+            pendingFiles.forEach(item => {
+                const toolName = item.file.pendingTool;
+                item.file.pendingTool = null;
+                runToolOnFile(toolName, item.index);
+            });
+            
+            updateFileList();
+        }
+
+        function downloadSingleResult(filename) {
+            // Find the result file in selectedFiles
+            let resultFile = null;
+            for (const fileObj of selectedFiles) {
+                if (fileObj.results) {
+                    resultFile = fileObj.results.find(r => r.name === filename);
+                    if (resultFile) break;
+                }
+            }
+            
+            if (!resultFile) {
+                console.error(`Could not find ${filename}`);
+                return;
+            }
+            
+            const blob = new Blob([resultFile.data], { type: resultFile.type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function downloadSelectedResults() {
+            if (selectedFileIndices.size === 0) return;
+            
+            const zip = new JSZip();
+            let fileCount = 0;
+            
+            selectedFileIndices.forEach(index => {
+                const fileObj = selectedFiles[index];
+                if (fileObj.results && fileObj.results.length > 0) {
+                    const folderName = fileObj.customName.replace(/[^a-zA-Z0-9]/g, '_');
+                    fileObj.results.forEach(result => {
+                        zip.file(`${folderName}/${result.name}`, result.data);
+                        fileCount++;
+                    });
+                }
+            });
+            
+            if (fileCount === 0) {
+                return;
+            }
+            
+            const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `selected_results_${Date.now()}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function downloadAllResults() {
+            const zip = new JSZip();
+            let fileCount = 0;
+            
+            selectedFiles.forEach(fileObj => {
+                if (fileObj.results && fileObj.results.length > 0) {
+                    const folderName = fileObj.customName.replace(/[^a-zA-Z0-9]/g, '_');
+                    fileObj.results.forEach(result => {
+                        zip.file(`${folderName}/${result.name}`, result.data);
+                        fileCount++;
+                    });
+                }
+            });
+            
+            if (fileCount === 0) {
+                return;
+            }
+            
+            const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+            const url = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `all_results_${Date.now()}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Queue processing function
+        async function processQueue() {
+            if (isProcessingQueue || jobQueue.length === 0) {
+                return;
+            }
+
+            isProcessingQueue = true;
+
+            while (jobQueue.length > 0) {
+                const job = jobQueue.shift();
+
+                if (job.isPaired) {
+                    await executeToolOnPairedFiles(job.toolName, job.fileIndex, job.pairedIndex);
+                } else {
+                    await executeToolOnFile(job.toolName, job.fileIndex);
+                }
+            }
+
+            isProcessingQueue = false;
+        }
+
+        // Add job to queue
+        function runToolOnFile(toolName, fileIndex) {
+            const fileObj = selectedFiles[fileIndex];
+            if (!fileObj) return;
+
+            // Add to queue
+            jobQueue.push({ toolName, fileIndex, isPaired: false });
+
+            // Set status to queued
+            fileObj.status = 'queued';
+            fileObj.logs = [`Queued ${toolName} for ${fileObj.customName}...`];
+            fileObj.terminalExpanded = false;
+            fileObj.resultsExpanded = true;
+            updateFileList();
+
+            // Start processing queue
+            processQueue();
+        }
+
+        // Add paired-end job to queue
+        function runToolOnPairedFiles(toolName, r1FileIndex) {
+            const r1FileObj = selectedFiles[r1FileIndex];
+            if (!r1FileObj || r1FileObj.pairedWith === null) return;
+
+            const r2FileIndex = r1FileObj.pairedWith;
+            const r2FileObj = selectedFiles[r2FileIndex];
+
+            // Add to queue (only one job for the pair)
+            jobQueue.push({ toolName, fileIndex: r1FileIndex, isPaired: true, pairedIndex: r2FileIndex });
+
+            // Set status to queued for both files
+            r1FileObj.status = 'queued';
+            r2FileObj.status = 'queued';
+            r1FileObj.logs = [`Queued ${toolName} (PE mode) for ${r1FileObj.customName} & ${r2FileObj.customName}...`];
+            r2FileObj.logs = [`Queued ${toolName} (PE mode) for ${r1FileObj.customName} & ${r2FileObj.customName}...`];
+            r1FileObj.terminalExpanded = false;
+            r2FileObj.terminalExpanded = false;
+            r1FileObj.resultsExpanded = true;
+            r2FileObj.resultsExpanded = true;
+            updateFileList();
+
+            // Start processing queue
+            processQueue();
+        }
+
+        // Cancel a queued job
+        function cancelQueuedJob(fileIndex) {
+            const fileObj = selectedFiles[fileIndex];
+            if (!fileObj || fileObj.status !== 'queued') return;
+
+            // Find and remove from queue
+            const queueIndex = jobQueue.findIndex(job => job.fileIndex === fileIndex);
+            if (queueIndex >= 0) {
+                jobQueue.splice(queueIndex, 1);
+                fileObj.status = 'idle';
+                fileObj.logs = [`Job cancelled for ${fileObj.customName}`];
+                updateFileList();
+            }
+        }
+
+        // Actual execution function (previously runToolOnFile)
+        async function executeToolOnFile(toolName, fileIndex) {
+            const fileObj = selectedFiles[fileIndex];
+            if (!fileObj) return;
+
+            fileObj.status = 'running';
+            fileObj.logs = []; // Clear previous logs
+            fileObj.terminalExpanded = false; // Keep terminal minimized, user can expand
+            fileObj.resultsExpanded = true; // Auto-expand results section
+            updateFileList();
+
+            // Helper to log to file and update UI in real-time
+            const logForFile = (text, isError = false) => {
+                fileObj.logs.push(text);
+                updateFileList(); // Update UI to show new log
+            };
+
+            logForFile(`Running ${toolName} on ${fileObj.customName}...`);
+
+            try {
+                // Initialize worker if needed
+                if (!isInitialized || fastpWorker === null) {
+                    logForFile(`Initializing ${toolName} WebAssembly module...`);
+
+                    if (!await initializeTool(toolName)) {
+                        logForFile(`Failed to initialize ${toolName}`, true);
+                        fileObj.status = 'error';
+                        updateFileList();
+                        return;
+                    }
+                    logForFile(`${toolName} initialized successfully`);
+                }
+
+                workerBusy = true;
+
+                // Get file data
+                logForFile(`Loading: ${fileObj.customName}`);
+                const arrayBuffer = await getFileData(fileObj);
+
+                // Prepare arguments based on tool
+                const fileName = fileObj.file.name;
+                let args;
+
+                if (toolName === 'fastp') {
+                    const outFileName = fileName.replace(/\.(fastq|fq)(\.gz)?$/i, '_filtered.$1$2');
+                    const htmlFileName = fileName.replace(/\.(fastq|fq)(\.gz)?$/i, '_report.html');
+                    const jsonFileName = fileName.replace(/\.(fastq|fq)(\.gz)?$/i, '_report.json');
+
+                    // Use custom options if saved, otherwise use defaults
+                    args = buildFastpArgs(fileName, outFileName, htmlFileName, jsonFileName);
+
+                    logForFile(`Using options: quality=${toolConfigs.fastp.quality}, length=${toolConfigs.fastp.length}, dedup=${toolConfigs.fastp.dedup}`);
+                } else if (toolName === 'bowtie2') {
+                    // Check if file is FASTQ (required for Bowtie2)
+                    if (!fileName.match(/\.(fastq|fq)(\.gz)?$/i)) {
+                        throw new Error(`Bowtie2 requires FASTQ files (.fastq/.fq), but got: ${fileName}. FASTA files (.fasta/.fa) are not supported for alignment.`);
+                    }
+
+                    const outFileName = fileName.replace(/\.(fastq|fq)(\.gz)?$/i, '_aligned.sam');
+
+                    // Use custom options if saved, otherwise use defaults
+                    args = buildBowtie2Args(fileName, outFileName);
+
+                    logForFile(`Using options: mode=${toolConfigs.bowtie2.mode}, preset=${toolConfigs.bowtie2.preset}, no-unal=${toolConfigs.bowtie2.noUnal}`);
+                } else if (toolName === 'swiftamr') {
+                    // Check if database is loaded
+                    if (!toolConfigs.swiftamr.database) {
+                        throw new Error('SwiftAMR requires an AMR gene database. Please upload a database in the tool options.');
+                    }
+
+                    // Check if file is FASTQ
+                    if (!fileName.match(/\.(fastq|fq)(\.gz)?$/i)) {
+                        throw new Error(`SwiftAMR requires FASTQ files (.fastq/.fq), but got: ${fileName}`);
+                    }
+
+                    logForFile(`Using AMR database: ${toolConfigs.swiftamr.databaseName}`);
+
+                    // SwiftAMR uses args array but it's empty since we pass database directly
+                    args = [];
+                } else {
+                    throw new Error(`Unknown tool: ${toolName}`);
+                }
+
+                // Set up worker message handler for this run
+                const runPromise = new Promise((resolve, reject) => {
+                    fastpWorker.onmessage = function(e) {
+                        const { type } = e.data;
+
+                        if (type === 'log') {
+                            logForFile(e.data.text, e.data.isError || false);
+                        } else if (type === 'stdout') {
+                            // fastp stdout output
+                            logForFile(e.data.text);
+                        } else if (type === 'stderr') {
+                            // fastp stderr output
+                            logForFile(e.data.text);
+                        } else if (type === 'complete') {
+                            if (e.data.success) {
+                                // Store output files (data is already Uint8Array from worker)
+                                fileObj.results = e.data.outputFiles.map(file => ({
+                                    name: file.name,
+                                    data: file.data,
+                                    type: file.type,
+                                    size: file.size
+                                }));
+
+                                fileObj.status = 'success';
+                                fileObj.lastTool = toolName;
+                                fileObj.resultsExpanded = true; // Auto-expand results
+                                logForFile(`Completed ${toolName} on ${fileObj.customName}`);
+                                resolve();
+                            } else {
+                                logForFile(`Error: ${e.data.error}`, true);
+                                fileObj.status = 'error';
+                                resolve();
+                            }
+                        }
+                    };
+
+                    fastpWorker.onerror = function(error) {
+                        logForFile(`Worker error: ${error.message}`, true);
+                        fileObj.status = 'error';
+                        reject(error);
+                    };
+                });
+
+                // Send run command to worker
+                const runData = {
+                    toolName: toolName,
+                    inputFileName: fileName,
+                    inputFileData: arrayBuffer,
+                    args: args
+                };
+
+                // Add database for SwiftAMR
+                if (toolName === 'swiftamr') {
+                    runData.databaseData = toolConfigs.swiftamr.database;
+                    runData.databasePath = toolConfigs.swiftamr.databaseName || 'amr_database.fasta';
+                }
+
+                fastpWorker.postMessage({
+                    type: 'run',
+                    data: runData
+                });
+
+                // Wait for completion
+                await runPromise;
+                workerBusy = false;
+
+            } catch (error) {
+                logForFile(`Error: ${error.message}`, true);
+                fileObj.status = 'error';
+                workerBusy = false;
+            }
+
+            updateFileList();
+        }
+
+        // Execute tool on paired-end files
+        async function executeToolOnPairedFiles(toolName, r1FileIndex, r2FileIndex) {
+            const r1FileObj = selectedFiles[r1FileIndex];
+            const r2FileObj = selectedFiles[r2FileIndex];
+            if (!r1FileObj || !r2FileObj) return;
+
+            r1FileObj.status = 'running';
+            r2FileObj.status = 'running';
+            r1FileObj.logs = []; // Clear previous logs
+            r2FileObj.logs = []; // Clear previous logs
+            r1FileObj.terminalExpanded = false;
+            r2FileObj.terminalExpanded = false;
+            r1FileObj.resultsExpanded = true;
+            r2FileObj.resultsExpanded = true;
+            updateFileList();
+
+            // Helper to log to both files
+            const logForBoth = (text, isError = false) => {
+                r1FileObj.logs.push(text);
+                r2FileObj.logs.push(text);
+                updateFileList();
+            };
+
+            logForBoth(`Running ${toolName} (PE mode) on ${r1FileObj.customName} & ${r2FileObj.customName}...`);
+
+            try {
+                // Initialize worker if needed
+                if (!isInitialized || fastpWorker === null) {
+                    logForBoth(`Initializing ${toolName} WebAssembly module...`);
+
+                    if (!await initializeTool(toolName)) {
+                        logForBoth(`Failed to initialize ${toolName}`, true);
+                        r1FileObj.status = 'error';
+                        r2FileObj.status = 'error';
+                        updateFileList();
+                        return;
+                    }
+                    logForBoth(`${toolName} initialized successfully`);
+                }
+
+                workerBusy = true;
+
+                // Get file data for both files
+                logForBoth(`Loading: ${r1FileObj.customName} & ${r2FileObj.customName}`);
+                const arrayBuffer1 = await getFileData(r1FileObj);
+                const arrayBuffer2 = await getFileData(r2FileObj);
+
+                // Prepare arguments based on tool
+                const fileName1 = r1FileObj.file.name;
+                const fileName2 = r2FileObj.file.name;
+                let args;
+
+                // Extract base name (remove _R1/_1 suffix)
+                const baseName = fileName1.replace(/_R?1([_\.])/i, '$1')
+                                          .replace(/\.R?1\./i, '.')
+                                          .replace(/_R?1\.(fastq|fq)/i, '.$1');
+
+                if (toolName === 'fastp') {
+                    const outFileName1 = fileName1.replace(/\.(fastq|fq)(\.gz)?$/i, '_filtered.$1$2');
+                    const outFileName2 = fileName2.replace(/\.(fastq|fq)(\.gz)?$/i, '_filtered.$1$2');
+                    const htmlFileName = baseName.replace(/\.(fastq|fq)(\.gz)?$/i, '_report.html');
+                    const jsonFileName = baseName.replace(/\.(fastq|fq)(\.gz)?$/i, '_report.json');
+
+                    args = buildFastpArgsPE(fileName1, fileName2, outFileName1, outFileName2, htmlFileName, jsonFileName);
+
+                    logForBoth(`Using options: quality=${toolConfigs.fastp.quality}, length=${toolConfigs.fastp.length}, dedup=${toolConfigs.fastp.dedup}`);
+                } else if (toolName === 'bowtie2') {
+                    // Check if files are FASTQ (required for Bowtie2)
+                    if (!fileName1.match(/\.(fastq|fq)(\.gz)?$/i) || !fileName2.match(/\.(fastq|fq)(\.gz)?$/i)) {
+                        throw new Error(`Bowtie2 requires FASTQ files (.fastq/.fq), but got: ${fileName1} & ${fileName2}. FASTA files (.fasta/.fa) are not supported for alignment.`);
+                    }
+
+                    const outFileName = baseName.replace(/\.(fastq|fq)(\.gz)?$/i, '_aligned.sam');
+
+                    args = buildBowtie2Args(fileName1, outFileName, fileName2);
+
+                    logForBoth(`Using options: mode=${toolConfigs.bowtie2.mode}, preset=${toolConfigs.bowtie2.preset}, no-unal=${toolConfigs.bowtie2.noUnal}`);
+                } else {
+                    throw new Error(`Unknown tool: ${toolName}`);
+                }
+
+                // Set up worker message handler for this run
+                const runPromise = new Promise((resolve, reject) => {
+                    fastpWorker.onmessage = function(e) {
+                        const { type } = e.data;
+
+                        if (type === 'log') {
+                            logForBoth(e.data.text, e.data.isError || false);
+                        } else if (type === 'stdout') {
+                            logForBoth(e.data.text);
+                        } else if (type === 'stderr') {
+                            logForBoth(e.data.text);
+                        } else if (type === 'complete') {
+                            if (e.data.success) {
+                                // Store output files in R1 file object
+                                r1FileObj.results = e.data.outputFiles.map(file => ({
+                                    name: file.name,
+                                    data: file.data,
+                                    type: file.type,
+                                    size: file.size
+                                }));
+
+                                r1FileObj.status = 'success';
+                                r2FileObj.status = 'success';
+                                r1FileObj.lastTool = toolName;
+                                r2FileObj.lastTool = toolName;
+                                r1FileObj.resultsExpanded = true;
+                                r2FileObj.resultsExpanded = true;
+                                logForBoth(`Completed ${toolName} on ${r1FileObj.customName} & ${r2FileObj.customName}`);
+                                resolve();
+                            } else {
+                                logForBoth(`Error: ${e.data.error}`, true);
+                                r1FileObj.status = 'error';
+                                r2FileObj.status = 'error';
+                                resolve();
+                            }
+                        }
+                    };
+
+                    fastpWorker.onerror = function(error) {
+                        logForBoth(`Worker error: ${error.message}`, true);
+                        r1FileObj.status = 'error';
+                        r2FileObj.status = 'error';
+                        reject(error);
+                    };
+                });
+
+                // Send run command to worker with both files
+                // Note: The worker currently only accepts one input file, so we need to write both to the virtual filesystem
+                fastpWorker.postMessage({
+                    type: 'run',
+                    data: {
+                        toolName: toolName,
+                        inputFileName: fileName1,
+                        inputFileData: arrayBuffer1,
+                        inputFileName2: fileName2,
+                        inputFileData2: arrayBuffer2,
+                        args: args
+                    }
+                });
+
+                // Wait for completion
+                await runPromise;
+                workerBusy = false;
+
+            } catch (error) {
+                logForBoth(`Error: ${error.message}`, true);
+                r1FileObj.status = 'error';
+                r2FileObj.status = 'error';
+                workerBusy = false;
+            }
+
+            updateFileList();
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, '&amp;')
+                       .replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;')
+                       .replace(/"/g, '&quot;')
+                       .replace(/'/g, '&#039;');
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Set up event listeners only for elements that exist initially
+        if (fileUpload) {
+            fileUpload.addEventListener('change', (e) => {
+                handleFiles(e.target.files);
+            });
+        }
+
+        if (uploadArea) {
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (!uploadArea.classList.contains('disabled')) {
+                    uploadArea.classList.add('drag-over');
+                }
+            });
+
+            uploadArea.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('drag-over');
+            });
+
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('drag-over');
+                if (!uploadArea.classList.contains('disabled')) {
+                    handleFiles(e.dataTransfer.files);
+                }
+            });
+        }
+
+        // --- Tool Options Management ---
+        // Store tool configurations
+        const toolConfigs = {
+            fastp: {
+                quality: 15,
+                length: 15,
+                trimFront: true,
+                trimTail: true,
+                dedup: false,
+                adapterTrim: true
+            },
+            bowtie2: {
+                mode: '--end-to-end',
+                preset: '--sensitive',
+                noUnal: true,
+                noHead: false
+            },
+            swiftamr: {
+                database: null,  // Will hold ArrayBuffer of FASTA database
+                databaseName: null,
+                format: 'tsv'
+            }
+        };
+
+        // Toggle tool options panel
+        function toggleToolOptions(toolName) {
+            const toolCard = document.getElementById(`${toolName}-tool`);
+            const optionsPanel = document.getElementById(`${toolName}-options`);
+            const chevron = document.getElementById(`${toolName}-chevron`);
+
+            if (optionsPanel.classList.contains('expanded')) {
+                optionsPanel.classList.remove('expanded');
+                chevron.style.transform = 'rotate(-90deg)';
+                toolCard.classList.remove('active');
+            } else {
+                optionsPanel.classList.add('expanded');
+                chevron.style.transform = 'rotate(0deg)';
+                toolCard.classList.add('active');
+            }
+        }
+
+        // Save tool options
+        function saveToolOptions(toolName) {
+            if (toolName === 'fastp') {
+                toolConfigs.fastp = {
+                    quality: parseInt(document.getElementById('fastp-quality').value) || 15,
+                    length: parseInt(document.getElementById('fastp-length').value) || 15,
+                    trimFront: document.getElementById('fastp-trim-front').checked,
+                    trimTail: document.getElementById('fastp-trim-tail').checked,
+                    dedup: document.getElementById('fastp-dedup').checked,
+                    adapterTrim: document.getElementById('fastp-adapter-trim').checked
+                };
+
+                console.log('Saved fastp options:', toolConfigs.fastp);
+
+                // Enable dragging
+                const toolCard = document.getElementById('fastp-tool');
+                toolCard.setAttribute('draggable', 'true');
+
+                // Close options panel
+                toggleToolOptions('fastp');
+
+                // Show success feedback
+                const saveBtn = document.getElementById('fastp-save-btn');
+                const originalText = saveBtn.textContent;
+                saveBtn.textContent = '✓ Saved!';
+                saveBtn.style.background = '#10b981';
+                setTimeout(() => {
+                    saveBtn.textContent = originalText;
+                    saveBtn.style.background = '';
+                }, 2000);
+            } else if (toolName === 'bowtie2') {
+                toolConfigs.bowtie2 = {
+                    mode: document.getElementById('bowtie2-mode').value,
+                    preset: document.getElementById('bowtie2-preset').value,
+                    noUnal: document.getElementById('bowtie2-no-unal').checked,
+                    noHead: document.getElementById('bowtie2-no-head').checked
+                };
+
+                console.log('Saved bowtie2 options:', toolConfigs.bowtie2);
+
+                // Enable dragging
+                const toolCard = document.getElementById('bowtie2-tool');
+                toolCard.setAttribute('draggable', 'true');
+
+                // Close options panel
+                toggleToolOptions('bowtie2');
+
+                // Show success feedback
+                const saveBtn = document.getElementById('bowtie2-save-btn');
+                const originalText = saveBtn.textContent;
+                saveBtn.textContent = '✓ Saved!';
+                saveBtn.style.background = '#10b981';
+                setTimeout(() => {
+                    saveBtn.textContent = originalText;
+                    saveBtn.style.background = '';
+                }, 2000);
+            } else if (toolName === 'swiftamr') {
+                // Check if database is loaded
+                if (!toolConfigs.swiftamr.database) {
+                    alert('Please upload an AMR gene database first');
+                    return;
+                }
+
+                toolConfigs.swiftamr.format = document.getElementById('swiftamr-format').value;
+
+                console.log('Saved swiftamr options:', {
+                    database: toolConfigs.swiftamr.databaseName,
+                    format: toolConfigs.swiftamr.format
+                });
+
+                // Enable dragging
+                const toolCard = document.getElementById('swiftamr-tool');
+                toolCard.setAttribute('draggable', 'true');
+
+                // Close options panel
+                toggleToolOptions('swiftamr');
+
+                // Show success feedback
+                const saveBtn = document.getElementById('swiftamr-save-btn');
+                const originalText = saveBtn.textContent;
+                saveBtn.textContent = '✓ Saved!';
+                saveBtn.style.background = '#10b981';
+                setTimeout(() => {
+                    saveBtn.textContent = originalText;
+                    saveBtn.style.background = '';
+                }, 2000);
+            }
+        }
+
+        // Reset tool options to defaults
+        function resetToolOptions(toolName) {
+            if (toolName === 'fastp') {
+                document.getElementById('fastp-quality').value = 15;
+                document.getElementById('fastp-length').value = 15;
+                document.getElementById('fastp-trim-front').checked = true;
+                document.getElementById('fastp-trim-tail').checked = true;
+                document.getElementById('fastp-dedup').checked = false;
+                document.getElementById('fastp-adapter-trim').checked = true;
+
+                toolConfigs.fastp = {
+                    quality: 15,
+                    length: 15,
+                    trimFront: true,
+                    trimTail: true,
+                    dedup: false,
+                    adapterTrim: true
+                };
+
+                console.log('Reset fastp options to defaults');
+            } else if (toolName === 'bowtie2') {
+                document.getElementById('bowtie2-mode').value = '--end-to-end';
+                document.getElementById('bowtie2-preset').value = '--sensitive';
+                document.getElementById('bowtie2-no-unal').checked = true;
+                document.getElementById('bowtie2-no-head').checked = false;
+
+                toolConfigs.bowtie2 = {
+                    mode: '--end-to-end',
+                    preset: '--sensitive',
+                    noUnal: true,
+                    noHead: false
+                };
+
+                console.log('Reset bowtie2 options to defaults');
+            } else if (toolName === 'swiftamr') {
+                // Clear database
+                document.getElementById('swiftamr-database').value = '';
+                document.getElementById('swiftamr-format').value = 'tsv';
+                document.getElementById('swiftamr-db-status').style.display = 'none';
+
+                toolConfigs.swiftamr = {
+                    database: null,
+                    databaseName: null,
+                    format: 'tsv'
+                };
+
+                // Disable dragging until database is loaded
+                const toolCard = document.getElementById('swiftamr-tool');
+                toolCard.setAttribute('draggable', 'false');
+
+                console.log('Reset swiftamr options to defaults');
+            }
+        }
+
+        // Build fastp arguments based on saved options
+        function buildFastpArgs(fileName, outFileName, htmlFileName, jsonFileName) {
+            const config = toolConfigs.fastp;
+            const args = [
+                '-i', fileName,
+                '-o', outFileName,
+                '-h', htmlFileName,
+                '-j', jsonFileName,
+                '--thread', '1'
+            ];
+
+            // Add quality threshold
+            if (config.quality) {
+                args.push('-q', config.quality.toString());
+            }
+
+            // Add length threshold
+            if (config.length) {
+                args.push('-l', config.length.toString());
+            }
+
+            // Add deduplication
+            if (config.dedup) {
+                args.push('--dedup');
+            }
+
+            // Disable adapter trimming if requested
+            if (!config.adapterTrim) {
+                args.push('--disable_adapter_trimming');
+            }
+
+            return args;
+        }
+
+        // Build bowtie2 arguments based on saved options
+        function buildBowtie2Args(fileName, outFileName, fileName2 = null) {
+            const config = toolConfigs.bowtie2;
+            const args = [
+                '-x', 'megares',  // Index basename (without .bt2 extension)
+            ];
+
+            // Paired-end or single-end
+            if (fileName2) {
+                args.push('-1', fileName, '-2', fileName2);  // Paired-end reads
+            } else {
+                args.push('-U', fileName);  // Unpaired reads
+            }
+
+            args.push('-S', outFileName); // SAM output
+
+            // Add alignment mode
+            args.push(config.mode);
+
+            // Add preset
+            args.push(config.preset);
+
+            // Suppress unaligned reads
+            if (config.noUnal) {
+                args.push('--no-unal');
+            }
+
+            // Suppress SAM header
+            if (config.noHead) {
+                args.push('--no-head');
+            }
+
+            return args;
+        }
+
+        // Build fastp arguments for paired-end
+        function buildFastpArgsPE(fileName1, fileName2, outFileName1, outFileName2, htmlFileName, jsonFileName) {
+            const config = toolConfigs.fastp;
+            const args = [
+                '-i', fileName1,
+                '-I', fileName2,
+                '-o', outFileName1,
+                '-O', outFileName2,
+                '-h', htmlFileName,
+                '-j', jsonFileName,
+                '--thread', '1'
+            ];
+
+            // Add quality threshold
+            if (config.quality) {
+                args.push('-q', config.quality.toString());
+            }
+
+            // Add length threshold
+            if (config.length) {
+                args.push('-l', config.length.toString());
+            }
+
+            // Add deduplication
+            if (config.dedup) {
+                args.push('--dedup');
+            }
+
+            // Disable adapter trimming if requested
+            if (!config.adapterTrim) {
+                args.push('--disable_adapter_trimming');
+            }
+
+            return args;
+        }
+
+        // Set up tool options event listeners
+        document.getElementById('fastp-tool').addEventListener('click', (e) => {
+            // Don't toggle if already dragging
+            if (e.target.closest('.tool-card').classList.contains('dragging')) return;
+            toggleToolOptions('fastp');
+        });
+
+        document.getElementById('fastp-save-btn').addEventListener('click', () => {
+            saveToolOptions('fastp');
+        });
+
+        document.getElementById('fastp-reset-btn').addEventListener('click', () => {
+            resetToolOptions('fastp');
+        });
+
+        document.getElementById('bowtie2-tool').addEventListener('click', (e) => {
+            // Don't toggle if already dragging
+            if (e.target.closest('.tool-card').classList.contains('dragging')) return;
+            toggleToolOptions('bowtie2');
+        });
+
+        document.getElementById('bowtie2-save-btn').addEventListener('click', () => {
+            saveToolOptions('bowtie2');
+        });
+
+        document.getElementById('bowtie2-reset-btn').addEventListener('click', () => {
+            resetToolOptions('bowtie2');
+        });
+
+        // SwiftAMR tool listeners
+        document.getElementById('swiftamr-tool').addEventListener('click', (e) => {
+            if (e.target.closest('.tool-card').classList.contains('dragging')) return;
+            toggleToolOptions('swiftamr');
+        });
+
+        document.getElementById('swiftamr-save-btn').addEventListener('click', () => {
+            saveToolOptions('swiftamr');
+        });
+
+        document.getElementById('swiftamr-reset-btn').addEventListener('click', () => {
+            resetToolOptions('swiftamr');
+        });
+
+        // SwiftAMR database upload handler
+        document.getElementById('swiftamr-database').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const statusDiv = document.getElementById('swiftamr-db-status');
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = '#3b82f6';
+            statusDiv.style.color = 'white';
+            statusDiv.textContent = `Loading ${file.name}...`;
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                toolConfigs.swiftamr.database = arrayBuffer;
+                toolConfigs.swiftamr.databaseName = file.name;
+
+                statusDiv.style.background = '#10b981';
+                statusDiv.textContent = `✓ Loaded: ${file.name} (${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB)`;
+
+                console.log(`SwiftAMR database loaded: ${file.name}, ${arrayBuffer.byteLength} bytes`);
+            } catch (error) {
+                statusDiv.style.background = '#ef4444';
+                statusDiv.textContent = `✗ Failed to load ${file.name}: ${error.message}`;
+                console.error('Failed to load AMR database:', error);
+            }
+        });
+
+        // --- Drag and Drop Tool Execution ---
+        // Initialize tool drag handlers
+        const toolCards = document.querySelectorAll('.tool-card');
+        console.log(`Found ${toolCards.length} tool cards`);
+
+        toolCards.forEach(tool => {
+            tool.addEventListener('dragstart', (e) => {
+                // Only allow drag if draggable is explicitly set to true
+                if (tool.getAttribute('draggable') !== 'true') {
+                    e.preventDefault();
+                    return;
+                }
+
+                draggedTool = tool.dataset.tool;
+                tool.classList.add('dragging');
+                document.body.classList.add('dragging-tool');
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('text/plain', tool.dataset.tool);
+                console.log(`Started dragging tool: ${draggedTool}`);
+            });
+
+            tool.addEventListener('dragend', (e) => {
+                tool.classList.remove('dragging');
+                document.body.classList.remove('dragging-tool');
+                console.log(`Ended dragging tool: ${draggedTool}`);
+                draggedTool = null;
+                // Remove drag-over from all rows
+                document.querySelectorAll('.file-table tbody tr[data-file-index]').forEach(row => {
+                    row.classList.remove('drag-over');
+                });
+            });
+        });
+
+        document.addEventListener('dragover', (e) => {
+            if (!draggedTool) return;
+
+            const row = e.target.closest('.file-table tbody tr[data-file-index]');
+            if (row) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+
+                // Remove drag-over from all other rows
+                document.querySelectorAll('.file-table tbody tr[data-file-index]').forEach(r => {
+                    if (r !== row) r.classList.remove('drag-over');
+                });
+
+                row.classList.add('drag-over');
+            }
+        });
+
+        document.addEventListener('dragleave', (e) => {
+            if (!draggedTool) return;
+
+            const row = e.target.closest('.file-table tbody tr[data-file-index]');
+            if (row && !row.contains(e.relatedTarget)) {
+                row.classList.remove('drag-over');
+            }
+        });
+
+        document.addEventListener('drop', (e) => {
+            const row = e.target.closest('.file-table tbody tr[data-file-index]');
+            if (row && draggedTool) {
+                e.preventDefault();
+                row.classList.remove('drag-over');
+
+                const fileIndex = parseInt(row.dataset.fileIndex);
+                console.log(`Dropped tool ${draggedTool} on file index ${fileIndex}`);
+
+                // Check if multiple files are selected
+                if (selectedFileIndices.size > 1 && selectedFileIndices.has(fileIndex)) {
+                    // Assign to all selected files
+                    console.log(`Assigning to ${selectedFileIndices.size} selected files`);
+                    selectedFileIndices.forEach(index => {
+                        assignToolToFile(draggedTool, index);
+                    });
+                } else {
+                    // Assign to single file
+                    console.log(`Assigning to single file at index ${fileIndex}`);
+                    assignToolToFile(draggedTool, fileIndex);
+                }
+
+                draggedTool = null;
+            }
+        });
+
+        // --- Initialize Biotools Web Worker ---
+        async function initializeTool(toolName) {
+            return new Promise((resolve, reject) => {
+                try {
+                    // If worker exists and is for a different tool, terminate it first
+                    if (fastpWorker !== null && currentToolName !== null && currentToolName !== toolName) {
+                        console.log(`Switching from ${currentToolName} to ${toolName}, terminating old worker...`);
+                        fastpWorker.terminate();
+                        fastpWorker = null;
+                        isInitialized = false;
+                        currentToolName = null;
+                    }
+
+                    // If worker is already initialized for this tool, no need to reinitialize
+                    if (fastpWorker !== null && currentToolName === toolName && isInitialized) {
+                        console.log(`${toolName} worker already initialized`);
+                        resolve(true);
+                        return;
+                    }
+
+                    // Create the Web Worker using the new general biotools worker
+                    fastpWorker = new Worker('biotools-worker.js');
+
+                    // Set up message handler
+                    fastpWorker.onmessage = function(e) {
+                        const { type } = e.data;
+
+                        if (type === 'init-complete') {
+                            if (e.data.success) {
+                                isInitialized = true;
+                                currentToolName = toolName;
+                                console.log(`${e.data.toolName} worker initialized successfully`);
+                                resolve(true);
+                            } else {
+                                console.error('Error initializing worker:', e.data.error);
+                                resolve(false);
+                            }
+                        } else if (type === 'log') {
+                            // Log initialization messages (like loading index files)
+                            console.log(`[${toolName} init] ${e.data.text}`);
+                        }
+                    };
+
+                    fastpWorker.onerror = function(error) {
+                        console.error('Worker error:', error);
+                        reject(error);
+                    };
+
+                    // Initialize the worker with the tool name
+                    fastpWorker.postMessage({
+                        type: 'init',
+                        data: { toolName: toolName }
+                    });
+
+                } catch (error) {
+                    console.error(`Error creating ${toolName} worker:`, error);
+                    resolve(false);
+                }
+            });
+        }
+
+        // Initialize on load
+        console.log('%c🧬 swiftomics', 'font-size: 20px; font-weight: bold;');
+        console.log('blazing fast bioinformatics in your browser');
+    </script>
+</body>
+</html>
+
