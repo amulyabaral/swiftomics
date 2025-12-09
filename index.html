@@ -705,8 +705,13 @@
                     <p style="color:var(--text-light);font-size:0.8rem;max-width:35rem;margin-left:auto;margin-right:auto">
                         To get started, just upload FASTQ or FASTA files below, then drag tools from the left panel onto files to run analysis. All processing happens locally - your data never leaves your device.
                     </p>
+                    <div style="margin-top:1rem">
+                        <button id="load-example-btn" style="padding:0.5rem 1rem;background:var(--brand);color:white;border:none;border-radius:0.375rem;font-size:0.875rem;cursor:pointer;transition:opacity 0.15s" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+                            Load Example Data
+                        </button>
+                    </div>
                 </div>
-                
+
                 <!-- allow the upload area to shrink so it doesn't force page overflow -->
                 <label for="file-upload" id="upload-area" style="flex:1;min-height:0;margin:0 1rem 1rem 1rem">
                     <div id="upload-icon">
@@ -973,12 +978,13 @@
             // sample_1.fastq / sample_2.fastq
             // sample.R1.fastq / sample.R2.fastq
             // sample.1.fastq / sample.2.fastq
-            const r1Patterns = [/_R?1[_\.]/i, /\.R?1\./i, /_R?1\.(fastq|fq)/i];
-            const r2Patterns = [/_R?2[_\.]/i, /\.R?2\./i, /_R?2\.(fastq|fq)/i];
+            // sample_R1_filtered.fastq.gz / sample_R2_filtered.fastq.gz
+            const r1Patterns = [/_R?1[_\.]/i, /\.R?1\./i, /_R?1\.(fastq|fq)/i, /_1[_\.]/i, /\.1\./i, /_1\.(fastq|fq)/i];
+            const r2Patterns = [/_R?2[_\.]/i, /\.R?2\./i, /_R?2\.(fastq|fq)/i, /_2[_\.]/i, /\.2\./i, /_2\.(fastq|fq)/i];
 
             for (let i = 0; i < selectedFiles.length; i++) {
                 const file1 = selectedFiles[i];
-                if (file1.pairedWith !== null || file1.isOutputFile) continue;
+                if (file1.pairedWith !== null) continue;
 
                 const name1 = file1.file.name;
 
@@ -994,19 +1000,26 @@
                 for (let j = 0; j < selectedFiles.length; j++) {
                     if (i === j) continue;
                     const file2 = selectedFiles[j];
-                    if (file2.pairedWith !== null || file2.isOutputFile) continue;
+                    if (file2.pairedWith !== null) continue;
 
                     const name2 = file2.file.name;
                     const isR2 = r2Patterns.some(pattern => pattern.test(name2));
 
                     if (isR2) {
                         // Check if base names match
+                        // Replace R1/1 with X, and R2/2 with X to see if they match
                         const base1 = name1.replace(/_R?1([_\.])/i, '_X$1')
                                           .replace(/\.R?1\./i, '.X.')
-                                          .replace(/_R?1\.(fastq|fq)/i, '_X.$1');
+                                          .replace(/_R?1\.(fastq|fq)/i, '_X.$1')
+                                          .replace(/_1([_\.])/i, '_X$1')
+                                          .replace(/\.1\./i, '.X.')
+                                          .replace(/_1\.(fastq|fq)/i, '_X.$1');
                         const base2 = name2.replace(/_R?2([_\.])/i, '_X$1')
                                           .replace(/\.R?2\./i, '.X.')
-                                          .replace(/_R?2\.(fastq|fq)/i, '_X.$1');
+                                          .replace(/_R?2\.(fastq|fq)/i, '_X.$1')
+                                          .replace(/_2([_\.])/i, '_X$1')
+                                          .replace(/\.2\./i, '.X.')
+                                          .replace(/_2\.(fastq|fq)/i, '_X.$1');
 
                         if (base1 === base2) {
                             // Found a pair!
@@ -1182,7 +1195,44 @@
             return arrayBuffer;
         }
 
-        
+        // Load example data files
+        async function loadExampleData() {
+            const loadBtn = document.getElementById('load-example-btn');
+            if (loadBtn) {
+                loadBtn.disabled = true;
+                loadBtn.textContent = 'Loading...';
+            }
+
+            try {
+                const exampleFiles = [
+                    { name: 'example_R1.fastq.gz', path: 'example_data/example_R1.fastq.gz' },
+                    { name: 'example_R2.fastq.gz', path: 'example_data/example_R2.fastq.gz' }
+                ];
+
+                const fileObjects = [];
+                for (const exampleFile of exampleFiles) {
+                    const response = await fetch(exampleFile.path);
+                    if (!response.ok) {
+                        throw new Error(`Failed to load ${exampleFile.name}`);
+                    }
+                    const blob = await response.blob();
+                    const file = new File([blob], exampleFile.name, { type: 'application/gzip' });
+                    fileObjects.push(file);
+                }
+
+                await handleFiles(fileObjects);
+            } catch (error) {
+                console.error('Error loading example data:', error);
+                alert('Failed to load example data. Please make sure the example files are available in the example_data folder.');
+            } finally {
+                if (loadBtn) {
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = 'Load Example Data';
+                }
+            }
+        }
+
+
 
         function detectFileType(fileName) {
             const name = fileName.toLowerCase();
@@ -1634,18 +1684,26 @@
                 logs: [],
                 isOutputFile: true,
                 parentFileIndex: parentIndex,
-                depth: parentFile.depth + 1
+                depth: parentFile.depth + 1,
+                pairedWith: null  // Initialize pairedWith property
             };
-            
+
             // Insert into selectedFiles at the calculated position
             selectedFiles.splice(insertPosition, 0, newFileEntry);
-            
+
             // Update indices of files that reference indices after the insertion point
             selectedFiles.forEach(f => {
                 if (f.parentFileIndex !== null && f.parentFileIndex >= insertPosition) {
                     f.parentFileIndex++;
                 }
+                // Update pairedWith references if they're after the insertion point
+                if (f.pairedWith !== null && f.pairedWith >= insertPosition) {
+                    f.pairedWith++;
+                }
             });
+
+            // After adding the file, check if it can be paired with another file
+            detectPairedEndFiles();
             
             updateFileList();
         }
@@ -1896,8 +1954,8 @@
             logForFile(`Running ${toolName} on ${fileObj.customName}...`);
 
             try {
-                // Initialize worker if needed
-                if (!isInitialized || fastpWorker === null) {
+                // Initialize worker if needed (or if switching tools)
+                if (!isInitialized || fastpWorker === null || currentToolName !== toolName) {
                     logForFile(`Initializing ${toolName} WebAssembly module...`);
 
                     if (!await initializeTool(toolName)) {
@@ -2060,8 +2118,8 @@
             logForBoth(`Running ${toolName} (PE mode) on ${r1FileObj.customName} & ${r2FileObj.customName}...`);
 
             try {
-                // Initialize worker if needed
-                if (!isInitialized || fastpWorker === null) {
+                // Initialize worker if needed (or if switching tools)
+                if (!isInitialized || fastpWorker === null || currentToolName !== toolName) {
                     logForBoth(`Initializing ${toolName} WebAssembly module...`);
 
                     if (!await initializeTool(toolName)) {
@@ -2146,7 +2204,7 @@
                                 resolve();
                             } else {
                                 logForBoth(`Error: ${e.data.error}`, true);
-                                r1FileObj.status = 'error';
+                                 r1FileObj.status = 'error';
                                 r2FileObj.status = 'error';
                                 resolve();
                             }
@@ -2210,6 +2268,12 @@
             fileUpload.addEventListener('change', (e) => {
                 handleFiles(e.target.files);
             });
+        }
+
+        // Add event listener for load example data button
+        const loadExampleBtn = document.getElementById('load-example-btn');
+        if (loadExampleBtn) {
+            loadExampleBtn.addEventListener('click', loadExampleData);
         }
 
         if (uploadArea) {
@@ -2699,7 +2763,8 @@
                     }
 
                     // Create the Web Worker using the new general biotools worker
-                    fastpWorker = new Worker('biotools-worker.js');
+                    // Add cache buster to force reload of worker file
+                    fastpWorker = new Worker('biotools-worker.js?v=' + Date.now());
 
                     // Set up message handler
                     fastpWorker.onmessage = function(e) {

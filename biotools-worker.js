@@ -12,7 +12,8 @@ const TOOL_CONFIGS = {
         wasmPath: 'fastp-0.20.1/fastp.wasm',
         dataPath: 'fastp-0.20.1/fastp.data',
         outputPatterns: [
-            { argFlag: '-o', type: 'output', mimeType: 'auto' },  // auto-detect from extension
+            { argFlag: '-o', type: 'output', mimeType: 'auto' },  // R1 output (auto-detect from extension)
+            { argFlag: '-O', type: 'output', mimeType: 'auto' },  // R2 output for paired-end
             { argFlag: '-h', type: 'report', mimeType: 'text/html' },
             { argFlag: '-j', type: 'report', mimeType: 'application/json' }
         ]
@@ -305,14 +306,27 @@ self.onmessage = async function(e) {
 
                 self.postMessage({ type: 'log', text: `--- ${toolName} completed with exit code: ${returnCode} ---` });
 
+                // Debug: List all files in virtual filesystem
+                try {
+                    const files = toolModule.FS.readdir('/');
+                    self.postMessage({ type: 'log', text: `Files in virtual FS: ${files.join(', ')}` });
+                } catch (e) {
+                    self.postMessage({ type: 'log', text: `Could not list FS files: ${e.message}` });
+                }
+
                 // Read output files from virtual filesystem based on tool configuration
                 // Parse arguments to find output file paths
+                self.postMessage({ type: 'log', text: `Checking for ${config.outputPatterns.length} output patterns...` });
+
                 for (const pattern of config.outputPatterns) {
                     const argIndex = args.indexOf(pattern.argFlag);
+                    self.postMessage({ type: 'log', text: `Looking for ${pattern.argFlag}: found at index ${argIndex}` });
 
                     if (argIndex !== -1 && argIndex + 1 < args.length) {
                         try {
                             const outputFileName = args[argIndex + 1];
+                            self.postMessage({ type: 'log', text: `Attempting to read: ${outputFileName}` });
+
                             const fileData = toolModule.FS.readFile(outputFileName, { encoding: 'binary' });
 
                             // Determine MIME type
